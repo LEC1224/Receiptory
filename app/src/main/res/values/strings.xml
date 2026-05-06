@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Kvittordning</string>
+    <string name="app_subtitle">En enkel startpunkt för att samla och ordna kvitton.</string>
+    <string name="no_receipts">Inga kvitton tillagda ännu.</string>
+    <string name="add_receipt">Lägg till kvitto</string>
+
+    <plurals name="receipt_count">
+        <item quantity="one">%d kvitto tillagt</item>
+        <item quantity="other">%d kvitton tillagda</item>
+    </plurals>
+</resources>
