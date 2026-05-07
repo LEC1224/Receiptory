@@ -13,17 +13,27 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
+import java.util.zip.ZipOutputStream;
 
 public class ReceiptStore {
     private static final String DATABASE_FILE = "receipts.json";
+    private static final String BACKUP_DATABASE_ENTRY = "receipts.json";
+    private static final String BACKUP_PHOTO_DIRECTORY = "photos/";
 
     private final Context context;
     private final File databaseFile;
@@ -155,6 +165,71 @@ public class ReceiptStore {
         return destination;
     }
 
+    public void exportBackup(OutputStream target) throws IOException, JSONException {
+        try (ZipOutputStream zip = new ZipOutputStream(target)) {
+            zip.putNextEntry(new ZipEntry(BACKUP_DATABASE_ENTRY));
+            if (databaseFile.exists()) {
+                try (FileInputStream input = new FileInputStream(databaseFile)) {
+                    copy(input, zip);
+                }
+            } else {
+                zip.write(databaseJson().getBytes(StandardCharsets.UTF_8));
+            }
+            zip.closeEntry();
+
+            Set<String> exportedPhotos = new HashSet<>();
+            for (Receipt receipt : receipts) {
+                File photo = new File(receipt.photoPath);
+                if (!photo.exists() || !photo.isFile()) {
+                    continue;
+                }
+                String fileName = photo.getName();
+                if (fileName.isEmpty() || exportedPhotos.contains(fileName)) {
+                    continue;
+                }
+                exportedPhotos.add(fileName);
+                zip.putNextEntry(new ZipEntry(BACKUP_PHOTO_DIRECTORY + fileName));
+                try (FileInputStream input = new FileInputStream(photo)) {
+                    copy(input, zip);
+                }
+                zip.closeEntry();
+            }
+        }
+    }
+
+    public RestoreResult importBackup(InputStream source, boolean replace) throws IOException, JSONException {
+        File tempDirectory = new File(context.getCacheDir(), "restore_" + System.currentTimeMillis());
+        if (!tempDirectory.mkdirs()) {
+            throw new IOException("Could not prepare restore.");
+        }
+
+        File importedDatabase = new File(tempDirectory, BACKUP_DATABASE_ENTRY);
+        File importedPhotos = new File(tempDirectory, "photos");
+        if (!importedPhotos.mkdirs()) {
+            deleteRecursively(tempDirectory);
+            throw new IOException("Could not prepare restored photos.");
+        }
+
+        try {
+            unzipBackup(source, importedDatabase, importedPhotos);
+            if (!importedDatabase.exists()) {
+                throw new IOException("Backup does not contain a receipt database.");
+            }
+
+            JSONObject root = new JSONObject(readFile(importedDatabase));
+            List<Category> importedCategories = readCategories(root);
+            List<Receipt> importedReceipts = readReceipts(root);
+            RestoreResult result = replace
+                    ? replaceData(importedCategories, importedReceipts, importedPhotos)
+                    : mergeData(importedCategories, importedReceipts, importedPhotos);
+            save();
+            ensureDefaultCategories();
+            return result;
+        } finally {
+            deleteRecursively(tempDirectory);
+        }
+    }
+
     public void ensureDefaultCategories() {
         String[][] defaults = {
                 {"Supermarket", "🛒"},
@@ -234,27 +309,237 @@ public class ReceiptStore {
 
     private void save() {
         try {
-            JSONObject root = new JSONObject();
-            JSONArray categoryArray = new JSONArray();
-            JSONArray receiptArray = new JSONArray();
-
-            List<Category> sortedCategories = new ArrayList<>(categories);
-            Collections.sort(sortedCategories, Comparator.comparing(category -> category.name.toLowerCase(Locale.ROOT)));
-            for (Category category : sortedCategories) {
-                categoryArray.put(category.toJson());
-            }
-            for (Receipt receipt : receipts) {
-                receiptArray.put(receipt.toJson());
-            }
-
-            root.put("categories", categoryArray);
-            root.put("receipts", receiptArray);
-
             try (FileOutputStream output = new FileOutputStream(databaseFile)) {
-                output.write(root.toString(2).getBytes(StandardCharsets.UTF_8));
+                output.write(databaseJson().getBytes(StandardCharsets.UTF_8));
             }
         } catch (JSONException | IOException ignored) {
         }
+    }
+
+    private String databaseJson() throws JSONException {
+        JSONObject root = new JSONObject();
+        JSONArray categoryArray = new JSONArray();
+        JSONArray receiptArray = new JSONArray();
+
+        List<Category> sortedCategories = new ArrayList<>(categories);
+        Collections.sort(sortedCategories, Comparator.comparing(category -> category.name.toLowerCase(Locale.ROOT)));
+        for (Category category : sortedCategories) {
+            categoryArray.put(category.toJson());
+        }
+        for (Receipt receipt : receipts) {
+            receiptArray.put(receipt.toJson());
+        }
+
+        root.put("categories", categoryArray);
+        root.put("receipts", receiptArray);
+        return root.toString(2);
+    }
+
+    private RestoreResult replaceData(List<Category> importedCategories, List<Receipt> importedReceipts, File importedPhotos) throws IOException {
+        receipts.clear();
+        categories.clear();
+        deleteRecursively(photoDirectory);
+        if (!photoDirectory.exists() && !photoDirectory.mkdirs()) {
+            throw new IOException("Could not prepare receipt photos.");
+        }
+
+        for (Category category : importedCategories) {
+            categories.add(new Category(category.id, category.name, category.icon));
+        }
+
+        int addedReceipts = 0;
+        for (Receipt receipt : importedReceipts) {
+            receipts.add(copyImportedReceipt(receipt, importedPhotos, receipt.categoryId));
+            addedReceipts++;
+        }
+        return new RestoreResult(addedReceipts, importedCategories.size(), 0);
+    }
+
+    private RestoreResult mergeData(List<Category> importedCategories, List<Receipt> importedReceipts, File importedPhotos) throws IOException {
+        Map<String, String> categoryIds = new HashMap<>();
+        int addedCategories = 0;
+        for (Category importedCategory : importedCategories) {
+            Category existing = findCategoryByName(importedCategory.name);
+            if (existing != null) {
+                categoryIds.put(importedCategory.id, existing.id);
+                continue;
+            }
+
+            String categoryId = importedCategory.id;
+            if (getCategory(categoryId) != null || categoryId == null || categoryId.trim().isEmpty()) {
+                categoryId = createCategoryId(importedCategory.name);
+            }
+            categories.add(new Category(categoryId, importedCategory.name, cleanIcon(importedCategory.icon)));
+            categoryIds.put(importedCategory.id, categoryId);
+            addedCategories++;
+        }
+
+        Set<String> existingIds = new HashSet<>();
+        Set<String> existingSignatures = new HashSet<>();
+        for (Receipt receipt : receipts) {
+            existingIds.add(receipt.id);
+            existingSignatures.add(receiptSignature(receipt));
+        }
+
+        int addedReceipts = 0;
+        int skippedReceipts = 0;
+        for (Receipt importedReceipt : importedReceipts) {
+            String signature = receiptSignature(importedReceipt);
+            if (existingIds.contains(importedReceipt.id) || existingSignatures.contains(signature)) {
+                skippedReceipts++;
+                continue;
+            }
+
+            String categoryId = categoryIds.get(importedReceipt.categoryId);
+            if (categoryId == null || getCategory(categoryId) == null) {
+                Category other = findCategoryByName("Other");
+                categoryId = other == null ? addCategory("Other").id : other.id;
+            }
+            Receipt copied = copyImportedReceipt(importedReceipt, importedPhotos, categoryId);
+            receipts.add(copied);
+            existingIds.add(copied.id);
+            existingSignatures.add(signature);
+            addedReceipts++;
+        }
+        return new RestoreResult(addedReceipts, addedCategories, skippedReceipts);
+    }
+
+    private Receipt copyImportedReceipt(Receipt receipt, File importedPhotos, String categoryId) throws IOException {
+        String photoPath = receipt.photoPath;
+        File sourcePhoto = new File(importedPhotos, new File(receipt.photoPath).getName());
+        if (sourcePhoto.exists() && sourcePhoto.isFile()) {
+            File destination = uniquePhotoFile(sourcePhoto.getName());
+            try (FileInputStream input = new FileInputStream(sourcePhoto);
+                 FileOutputStream output = new FileOutputStream(destination)) {
+                copy(input, output);
+            }
+            photoPath = destination.getAbsolutePath();
+        }
+
+        return new Receipt(
+                receipt.id == null || receipt.id.trim().isEmpty() ? UUID.randomUUID().toString() : receipt.id,
+                categoryId,
+                receipt.merchant,
+                receipt.date,
+                receipt.total,
+                photoPath,
+                new ArrayList<>(receipt.items),
+                receipt.rawText,
+                receipt.createdAt
+        );
+    }
+
+    private File uniquePhotoFile(String fileName) {
+        String cleanName = fileName == null ? "" : fileName.replaceAll("[\\\\/:*?\"<>|]", "_");
+        if (cleanName.trim().isEmpty()) {
+            cleanName = "receipt_" + System.currentTimeMillis() + ".jpg";
+        }
+        File destination = new File(photoDirectory, cleanName);
+        if (!destination.exists()) {
+            return destination;
+        }
+
+        String base = cleanName;
+        String extension = "";
+        int dot = cleanName.lastIndexOf('.');
+        if (dot > 0) {
+            base = cleanName.substring(0, dot);
+            extension = cleanName.substring(dot);
+        }
+        int counter = 1;
+        do {
+            destination = new File(photoDirectory, base + "_" + counter + extension);
+            counter++;
+        } while (destination.exists());
+        return destination;
+    }
+
+    private void unzipBackup(InputStream source, File importedDatabase, File importedPhotos) throws IOException {
+        try (ZipInputStream zip = new ZipInputStream(source)) {
+            ZipEntry entry;
+            while ((entry = zip.getNextEntry()) != null) {
+                String name = entry.getName();
+                if (entry.isDirectory()) {
+                    zip.closeEntry();
+                    continue;
+                }
+
+                if (BACKUP_DATABASE_ENTRY.equals(name)) {
+                    try (FileOutputStream output = new FileOutputStream(importedDatabase)) {
+                        copy(zip, output);
+                    }
+                } else if (name.startsWith(BACKUP_PHOTO_DIRECTORY)) {
+                    String fileName = new File(name).getName();
+                    if (!fileName.trim().isEmpty()) {
+                        File outputFile = new File(importedPhotos, fileName.replaceAll("[\\\\/:*?\"<>|]", "_"));
+                        try (FileOutputStream output = new FileOutputStream(outputFile)) {
+                            copy(zip, output);
+                        }
+                    }
+                }
+                zip.closeEntry();
+            }
+        }
+    }
+
+    private List<Category> readCategories(JSONObject root) {
+        List<Category> importedCategories = new ArrayList<>();
+        JSONArray categoryArray = root.optJSONArray("categories");
+        if (categoryArray == null) {
+            return importedCategories;
+        }
+        for (int index = 0; index < categoryArray.length(); index++) {
+            JSONObject json = categoryArray.optJSONObject(index);
+            if (json != null) {
+                importedCategories.add(Category.fromJson(json));
+            }
+        }
+        return importedCategories;
+    }
+
+    private List<Receipt> readReceipts(JSONObject root) {
+        List<Receipt> importedReceipts = new ArrayList<>();
+        JSONArray receiptArray = root.optJSONArray("receipts");
+        if (receiptArray == null) {
+            return importedReceipts;
+        }
+        for (int index = 0; index < receiptArray.length(); index++) {
+            JSONObject json = receiptArray.optJSONObject(index);
+            if (json != null) {
+                importedReceipts.add(Receipt.fromJson(json));
+            }
+        }
+        return importedReceipts;
+    }
+
+    private static String receiptSignature(Receipt receipt) {
+        return normalize(receipt.merchant)
+                + "|" + normalize(receipt.date)
+                + "|" + String.format(Locale.US, "%.2f", receipt.total)
+                + "|" + normalize(receipt.rawText);
+    }
+
+    private static void copy(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[8192];
+        int read;
+        while ((read = input.read(buffer)) != -1) {
+            output.write(buffer, 0, read);
+        }
+    }
+
+    private static void deleteRecursively(File file) {
+        if (file == null || !file.exists()) {
+            return;
+        }
+        if (file.isDirectory()) {
+            File[] children = file.listFiles();
+            if (children != null) {
+                for (File child : children) {
+                    deleteRecursively(child);
+                }
+            }
+        }
+        file.delete();
     }
 
     private Category findCategoryByName(String name) {
@@ -313,5 +598,17 @@ public class ReceiptStore {
             return "🧾";
         }
         return icon.trim();
+    }
+
+    public static class RestoreResult {
+        public final int addedReceipts;
+        public final int addedCategories;
+        public final int skippedReceipts;
+
+        RestoreResult(int addedReceipts, int addedCategories, int skippedReceipts) {
+            this.addedReceipts = addedReceipts;
+            this.addedCategories = addedCategories;
+            this.skippedReceipts = skippedReceipts;
+        }
     }
 }

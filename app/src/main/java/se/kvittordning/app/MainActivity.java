@@ -2,6 +2,7 @@ package se.kvittordning.app;
 
 import android.Manifest;
 import android.app.AlertDialog;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
 import android.graphics.Color;
@@ -31,6 +32,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.ComponentActivity;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.camera.core.CameraSelector;
 import androidx.camera.core.ImageCapture;
@@ -43,6 +46,8 @@ import androidx.core.content.ContextCompat;
 import com.google.common.util.concurrent.ListenableFuture;
 
 import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.text.NumberFormat;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
@@ -77,6 +82,9 @@ public class MainActivity extends ComponentActivity {
     private String fullscreenReceiptId;
     private String storageSearchQuery = "";
     private Runnable currentBackAction;
+    private ActivityResultLauncher<String> createBackupLauncher;
+    private ActivityResultLauncher<String[]> restoreBackupLauncher;
+    private boolean pendingRestoreReplace = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -86,6 +94,7 @@ public class MainActivity extends ComponentActivity {
         settingsStore = new SettingsStore(this);
         receiptExtractor = new OpenAiReceiptExtractor();
         palette = Palette.from(this, settingsStore.getTheme());
+        registerBackupRestoreLaunchers();
         applySystemBars();
 
         root = new FrameLayout(this);
@@ -96,6 +105,32 @@ public class MainActivity extends ComponentActivity {
         });
         setContentView(root);
         showCamera();
+    }
+
+    private void registerBackupRestoreLaunchers() {
+        createBackupLauncher = registerForActivityResult(
+                new ActivityResultContracts.CreateDocument("application/zip"),
+                uri -> {
+                    if (uri != null) {
+                        exportBackup(uri);
+                    }
+                }
+        );
+        restoreBackupLauncher = registerForActivityResult(
+                new ActivityResultContracts.OpenDocument(),
+                uri -> {
+                    if (uri != null) {
+                        try {
+                            getContentResolver().takePersistableUriPermission(
+                                    uri,
+                                    Intent.FLAG_GRANT_READ_URI_PERMISSION
+                            );
+                        } catch (SecurityException ignored) {
+                        }
+                        importBackup(uri, pendingRestoreReplace);
+                    }
+                }
+        );
     }
 
     @Override
@@ -336,6 +371,17 @@ public class MainActivity extends ComponentActivity {
         moneyCard.addView(currency, matchWrap());
         content.addView(moneyCard, matchWrap());
 
+        LinearLayout backupCard = card();
+        backupCard.addView(label("Local backup"));
+        backupCard.addView(subtitle("Export a portable backup with receipts and photos, or restore one onto this device."));
+        Button backup = iconButtonText(R.drawable.ic_folder, "Back up receipts");
+        backupCard.addView(backup, compactButtonParams());
+        backup.setOnClickListener(view -> startBackup());
+        Button restore = iconButtonText(R.drawable.ic_folder, "Restore backup");
+        backupCard.addView(restore, compactButtonParams());
+        restore.setOnClickListener(view -> showRestoreChoiceDialog());
+        content.addView(backupCard, matchWrap());
+
         Button save = primaryButton("Save settings");
         content.addView(save, matchWrap());
         save.setOnClickListener(view -> {
@@ -352,6 +398,69 @@ public class MainActivity extends ComponentActivity {
             showCamera();
         });
 
+    }
+
+    private void startBackup() {
+        String fileName = "kvittordning-backup-"
+                + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date())
+                + ".zip";
+        createBackupLauncher.launch(fileName);
+    }
+
+    private void exportBackup(Uri uri) {
+        showLoading("Creating backup...");
+        apiExecutor.execute(() -> {
+            try (OutputStream output = getContentResolver().openOutputStream(uri)) {
+                if (output == null) {
+                    throw new IllegalStateException("Could not open backup destination.");
+                }
+                receiptStore.exportBackup(output);
+                runOnUiThread(() -> {
+                    toast("Backup created.");
+                    showSettings();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    toast("Backup failed: " + exception.getMessage());
+                    showSettings();
+                });
+            }
+        });
+    }
+
+    private void showRestoreChoiceDialog() {
+        String[] choices = {"Merge with current data", "Replace current data"};
+        new AlertDialog.Builder(this)
+                .setTitle("Restore backup")
+                .setItems(choices, (dialog, which) -> {
+                    pendingRestoreReplace = which == 1;
+                    restoreBackupLauncher.launch(new String[]{"application/zip", "application/octet-stream", "*/*"});
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void importBackup(Uri uri, boolean replace) {
+        showLoading(replace ? "Replacing from backup..." : "Merging backup...");
+        apiExecutor.execute(() -> {
+            try (InputStream input = getContentResolver().openInputStream(uri)) {
+                if (input == null) {
+                    throw new IllegalStateException("Could not open backup.");
+                }
+                ReceiptStore.RestoreResult result = receiptStore.importBackup(input, replace);
+                runOnUiThread(() -> {
+                    toast("Restore complete: " + result.addedReceipts + " receipts, "
+                            + result.addedCategories + " categories"
+                            + (result.skippedReceipts > 0 ? ", " + result.skippedReceipts + " skipped" : "") + ".");
+                    showCategories();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    toast("Restore failed: " + exception.getMessage());
+                    showSettings();
+                });
+            }
+        });
     }
 
     private void showCategories() {
