@@ -462,6 +462,10 @@ public class MainActivity extends ComponentActivity {
         content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name)));
         content.addView(title(money(receipt.total)));
 
+        Button edit = iconButtonText(R.drawable.ic_edit, "Edit receipt");
+        content.addView(edit, compactButtonParams());
+        edit.setOnClickListener(view -> showEditReceipt(receipt.id));
+
         Button move = iconButtonText(R.drawable.ic_folder, "Move category");
         content.addView(move, compactButtonParams());
         move.setOnClickListener(view -> showMoveReceiptDialog(receipt.id));
@@ -486,6 +490,189 @@ public class MainActivity extends ComponentActivity {
         Button back = secondaryButton("Add another");
         content.addView(back, matchWrap());
         back.setOnClickListener(view -> showCamera());
+    }
+
+    private void showEditReceipt(String receiptId) {
+        Receipt receipt = receiptStore.getReceipt(receiptId);
+        if (receipt == null) {
+            showCategories();
+            return;
+        }
+
+        root.removeAllViews();
+        ScrollView scrollView = page("Edit receipt", () -> showReceiptDetail(receiptId));
+        LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
+
+        LinearLayout basics = card();
+        basics.addView(label("Receipt"));
+
+        EditText merchant = input("Merchant");
+        merchant.setText(receipt.merchant);
+        basics.addView(merchant, matchWrap());
+
+        EditText date = input("Date");
+        date.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_DATE);
+        date.setText(receipt.date);
+        basics.addView(date, matchWrap());
+
+        EditText total = input("Total");
+        total.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        total.setText(formatDecimal(receipt.total));
+        basics.addView(total, matchWrap());
+
+        List<Category> categories = receiptStore.getCategories();
+        int[] selectedCategory = {0};
+        for (int index = 0; index < categories.size(); index++) {
+            if (categories.get(index).id.equals(receipt.categoryId)) {
+                selectedCategory[0] = index;
+            }
+        }
+        Button categoryButton = iconButtonText(R.drawable.ic_folder, categoryLabel(categories, selectedCategory[0]));
+        basics.addView(categoryButton, compactButtonParams());
+        categoryButton.setOnClickListener(view -> showReceiptCategoryPicker(categories, selectedCategory, categoryButton));
+        content.addView(basics, matchWrap());
+
+        LinearLayout itemsCard = card();
+        itemsCard.addView(label("Items"));
+        LinearLayout itemRows = new LinearLayout(this);
+        itemRows.setOrientation(LinearLayout.VERTICAL);
+        List<EditItemRow> editRows = new ArrayList<>();
+        for (ReceiptItem item : receipt.items) {
+            addEditableItemRow(itemRows, editRows, item.name, item.cost);
+        }
+        itemsCard.addView(itemRows, matchWrap());
+        Button addItem = iconButtonText(R.drawable.ic_add, "Add item");
+        itemsCard.addView(addItem, compactButtonParams());
+        addItem.setOnClickListener(view -> addEditableItemRow(itemRows, editRows, "", 0));
+        content.addView(itemsCard, matchWrap());
+
+        LinearLayout textCard = card();
+        textCard.addView(label("Extracted text"));
+        EditText rawText = input("Raw text");
+        rawText.setSingleLine(false);
+        rawText.setMinLines(5);
+        rawText.setGravity(Gravity.TOP | Gravity.START);
+        rawText.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+        rawText.setText(receipt.rawText);
+        textCard.addView(rawText, matchWrap());
+        content.addView(textCard, matchWrap());
+
+        Button save = primaryButton("Save changes");
+        content.addView(save, matchWrap());
+        save.setOnClickListener(view -> {
+            String merchantValue = merchant.getText().toString().trim();
+            String dateValue = date.getText().toString().trim();
+            if (merchantValue.isEmpty()) {
+                toast("Merchant cannot be empty.");
+                return;
+            }
+            if (dateValue.isEmpty()) {
+                toast("Date cannot be empty.");
+                return;
+            }
+
+            double totalValue;
+            try {
+                totalValue = parseAmount(total.getText().toString());
+            } catch (NumberFormatException exception) {
+                toast("Total must be a valid number.");
+                return;
+            }
+
+            List<ReceiptItem> updatedItems = new ArrayList<>();
+            for (EditItemRow row : editRows) {
+                if (row.deleted) {
+                    continue;
+                }
+                String name = row.name.getText().toString().trim();
+                String costText = row.cost.getText().toString().trim();
+                if (name.isEmpty() && costText.isEmpty()) {
+                    continue;
+                }
+                if (name.isEmpty()) {
+                    toast("Item name cannot be empty.");
+                    return;
+                }
+                try {
+                    updatedItems.add(new ReceiptItem(name, parseAmount(costText)));
+                } catch (NumberFormatException exception) {
+                    toast("Item costs must be valid numbers.");
+                    return;
+                }
+            }
+
+            String categoryId = receipt.categoryId;
+            if (selectedCategory[0] >= 0 && selectedCategory[0] < categories.size()) {
+                categoryId = categories.get(selectedCategory[0]).id;
+            }
+            Receipt updatedReceipt = new Receipt(
+                    receipt.id,
+                    categoryId,
+                    merchantValue,
+                    dateValue,
+                    totalValue,
+                    receipt.photoPath,
+                    updatedItems,
+                    rawText.getText().toString(),
+                    receipt.createdAt
+            );
+            receiptStore.updateReceipt(updatedReceipt);
+            toast("Receipt updated.");
+            showReceiptDetail(receiptId);
+        });
+    }
+
+    private void addEditableItemRow(LinearLayout container, List<EditItemRow> editRows, String nameValue, double costValue) {
+        LinearLayout itemRow = new LinearLayout(this);
+        itemRow.setOrientation(LinearLayout.VERTICAL);
+        itemRow.setPadding(0, dp(6), 0, dp(10));
+
+        EditText name = input("Item name");
+        name.setText(nameValue);
+        itemRow.addView(name, matchWrap());
+
+        LinearLayout costRow = row();
+        EditText cost = input("Cost");
+        cost.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        cost.setText(formatDecimal(costValue));
+        costRow.addView(cost, new LinearLayout.LayoutParams(0, dp(52), 1));
+
+        ImageButton delete = toolbarIconButton(R.drawable.ic_close);
+        LinearLayout.LayoutParams deleteParams = new LinearLayout.LayoutParams(dp(52), dp(52));
+        deleteParams.leftMargin = dp(8);
+        costRow.addView(delete, deleteParams);
+        itemRow.addView(costRow, matchWrap());
+
+        EditItemRow editRow = new EditItemRow(name, cost);
+        editRows.add(editRow);
+        delete.setOnClickListener(view -> {
+            editRow.deleted = true;
+            container.removeView(itemRow);
+        });
+        container.addView(itemRow, matchWrap());
+    }
+
+    private String categoryLabel(List<Category> categories, int selectedIndex) {
+        if (selectedIndex >= 0 && selectedIndex < categories.size()) {
+            Category category = categories.get(selectedIndex);
+            return category.icon + " " + category.name;
+        }
+        return "Choose category";
+    }
+
+    private void showReceiptCategoryPicker(List<Category> categories, int[] selectedIndex, Button categoryButton) {
+        String[] names = new String[categories.size()];
+        for (int index = 0; index < categories.size(); index++) {
+            names[index] = categories.get(index).icon + " " + categories.get(index).name;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Category")
+                .setItems(names, (dialog, which) -> {
+                    selectedIndex[0] = which;
+                    categoryButton.setText(categoryLabel(categories, selectedIndex[0]));
+                    dialog.dismiss();
+                })
+                .show();
     }
 
     private LinearLayout receiptEntry(Receipt receipt) {
@@ -1002,6 +1189,21 @@ public class MainActivity extends ComponentActivity {
         return format.format(amount);
     }
 
+    private String formatDecimal(double amount) {
+        if (amount == (long) amount) {
+            return String.valueOf((long) amount);
+        }
+        return String.valueOf(amount);
+    }
+
+    private double parseAmount(String value) {
+        String normalized = value == null ? "" : value.trim().replace(',', '.');
+        if (normalized.isEmpty()) {
+            return 0;
+        }
+        return Double.parseDouble(normalized);
+    }
+
     private static String normalizeSearch(String value) {
         String normalized = Normalizer.normalize(value == null ? "" : value.trim(), Normalizer.Form.NFD);
         return normalized.replaceAll("\\p{M}", "").toLowerCase(Locale.ROOT);
@@ -1204,5 +1406,16 @@ public class MainActivity extends ComponentActivity {
 
     private interface IconCallback {
         void onIconPicked(String icon);
+    }
+
+    private static class EditItemRow {
+        final EditText name;
+        final EditText cost;
+        boolean deleted;
+
+        EditItemRow(EditText name, EditText cost) {
+            this.name = name;
+            this.cost = cost;
+        }
     }
 }

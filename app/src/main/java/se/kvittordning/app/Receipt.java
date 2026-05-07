@@ -10,12 +10,12 @@ import java.util.List;
 public class Receipt {
     public final String id;
     public String categoryId;
-    public final String merchant;
-    public final String date;
-    public final double total;
+    public String merchant;
+    public String date;
+    public double total;
     public final String photoPath;
-    public final List<ReceiptItem> items;
-    public final String rawText;
+    public List<ReceiptItem> items;
+    public String rawText;
     public final long createdAt;
 
     public Receipt(

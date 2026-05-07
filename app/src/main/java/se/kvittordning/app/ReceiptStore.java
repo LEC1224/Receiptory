@@ -110,6 +110,16 @@ public class ReceiptStore {
         save();
     }
 
+    public void updateReceipt(Receipt updatedReceipt) {
+        for (int index = 0; index < receipts.size(); index++) {
+            if (receipts.get(index).id.equals(updatedReceipt.id)) {
+                receipts.set(index, updatedReceipt);
+                save();
+                return;
+            }
+        }
+    }
+
     public void moveReceipt(String receiptId, String categoryId) {
         Receipt receipt = getReceipt(receiptId);
         if (receipt != null && getCategory(categoryId) != null) {
