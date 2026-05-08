@@ -1,4 +1,4 @@
-# Kvittordning
+# Receiptory
 
 En native Android-app for att fotografera kvitton, extrahera inkopsdata med OpenAI och lagra kvitton efter kategori.
 

@@ -453,7 +453,7 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void startBackup() {
-        String fileName = "kvittordning-backup-"
+        String fileName = "receiptory-backup-"
                 + new SimpleDateFormat("yyyyMMdd-HHmm", Locale.US).format(new Date())
                 + ".zip";
         createBackupLauncher.launch(fileName);
@@ -1209,7 +1209,7 @@ public class MainActivity extends ComponentActivity {
         entry.setPadding(dp(10), dp(10), dp(12), dp(10));
         entry.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams params = matchWrap();
-        params.topMargin = dp(10);
+        params.topMargin = dp(14);
         entry.setLayoutParams(params);
 
         ImageView thumb = new ImageView(this);
@@ -1515,7 +1515,7 @@ public class MainActivity extends ComponentActivity {
         header.addView(receipt, new LinearLayout.LayoutParams(dp(22), dp(22)));
 
         TextView title = new TextView(this);
-        title.setText("Kvittordning");
+        title.setText("Receiptory");
         title.setTextColor(Color.WHITE);
         title.setTextSize(15);
         title.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
@@ -1530,7 +1530,7 @@ public class MainActivity extends ComponentActivity {
         card.setBackground(roundedStroke(palette.panel, dp(18), palette.stroke, 1));
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams params = matchWrap();
-        params.topMargin = dp(10);
+        params.topMargin = dp(14);
         card.setLayoutParams(params);
 
         TextView icon = new TextView(this);

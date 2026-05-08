@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Kvittordning</string>
+    <string name="app_name">Receiptory</string>
     <string name="app_subtitle">En enkel startpunkt för att samla och ordna kvitton.</string>
     <string name="no_receipts">Inga kvitton tillagda ännu.</string>
     <string name="add_receipt">Lägg till kvitto</string>
