@@ -86,6 +86,9 @@ public class MainActivity extends ComponentActivity {
     private String fullscreenReceiptId;
     private String storageSearchQuery = "";
     private Runnable currentBackAction;
+    private ImageButton shutterButton;
+    private ProgressBar shutterProgress;
+    private boolean captureInProgress = false;
     private ActivityResultLauncher<String> createBackupLauncher;
     private ActivityResultLauncher<String[]> restoreBackupLauncher;
     private boolean pendingRestoreReplace = false;
@@ -162,6 +165,9 @@ public class MainActivity extends ComponentActivity {
     private void showCamera() {
         currentBackAction = null;
         fullscreenReceiptId = null;
+        captureInProgress = false;
+        shutterButton = null;
+        shutterProgress = null;
         root.removeAllViews();
         FrameLayout cameraRoot = new FrameLayout(this);
         cameraRoot.setBackgroundColor(Color.BLACK);
@@ -187,7 +193,9 @@ public class MainActivity extends ComponentActivity {
         cameraRoot.addView(storageButton, storageParams);
         storageButton.setOnClickListener(view -> showCategories());
 
+        FrameLayout shutterFrame = new FrameLayout(this);
         ImageButton shutter = new ImageButton(this);
+        shutterButton = shutter;
         shutter.setImageResource(R.drawable.ic_camera);
         shutter.setColorFilter(palette.accent);
         shutter.setPadding(dp(20), dp(20), dp(20), dp(20));
@@ -197,9 +205,19 @@ public class MainActivity extends ComponentActivity {
         shutterBackground.setColor(palette.shutter);
         shutterBackground.setStroke(dp(5), palette.shutterRing);
         shutter.setBackground(shutterBackground);
+        shutterFrame.addView(shutter, matchParent());
+
+        ProgressBar progress = new ProgressBar(this);
+        shutterProgress = progress;
+        progress.setVisibility(View.GONE);
+        progress.setIndeterminate(true);
+        progress.setAlpha(0.9f);
+        FrameLayout.LayoutParams progressParams = new FrameLayout.LayoutParams(dp(34), dp(34), Gravity.CENTER);
+        shutterFrame.addView(progress, progressParams);
+
         FrameLayout.LayoutParams shutterParams = new FrameLayout.LayoutParams(dp(76), dp(76), Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
         shutterParams.bottomMargin = dp(36);
-        cameraRoot.addView(shutter, shutterParams);
+        cameraRoot.addView(shutterFrame, shutterParams);
         shutter.setOnClickListener(view -> captureReceipt());
 
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
@@ -229,11 +247,15 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void captureReceipt() {
+        if (captureInProgress) {
+            return;
+        }
         if (imageCapture == null) {
             toast("Camera is not ready yet.");
             return;
         }
 
+        setCaptureInProgress(true);
         File outputFile = new File(getCacheDir(), "capture_" + System.currentTimeMillis() + ".jpg");
         ImageCapture.OutputFileOptions options = new ImageCapture.OutputFileOptions.Builder(outputFile).build();
         imageCapture.takePicture(options, cameraExecutor, new ImageCapture.OnImageSavedCallback() {
@@ -244,9 +266,24 @@ public class MainActivity extends ComponentActivity {
 
             @Override
             public void onError(@NonNull ImageCaptureException exception) {
-                runOnUiThread(() -> toast("Could not take photo: " + exception.getMessage()));
+                runOnUiThread(() -> {
+                    setCaptureInProgress(false);
+                    toast("Could not take photo: " + exception.getMessage());
+                });
             }
         });
+    }
+
+    private void setCaptureInProgress(boolean inProgress) {
+        captureInProgress = inProgress;
+        if (shutterButton != null) {
+            shutterButton.setEnabled(!inProgress);
+            shutterButton.setAlpha(inProgress ? 0.5f : 1.0f);
+            shutterButton.setColorFilter(inProgress ? palette.muted : palette.accent);
+        }
+        if (shutterProgress != null) {
+            shutterProgress.setVisibility(inProgress ? View.VISIBLE : View.GONE);
+        }
     }
 
     private void showCaptureReview(File photoFile) {
