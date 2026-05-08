@@ -52,19 +52,47 @@ public class ReceiptStore {
     }
 
     public List<Category> getCategories() {
-        return new ArrayList<>(categories);
+        List<Category> visible = new ArrayList<>();
+        for (Category category : categories) {
+            if (!category.deleted) {
+                visible.add(category);
+            }
+        }
+        return visible;
     }
 
     public List<Receipt> getReceipts() {
+        return getReceipts(false);
+    }
+
+    public List<Receipt> getReceipts(boolean includeArchived) {
         List<Receipt> sorted = new ArrayList<>(receipts);
+        if (!includeArchived) {
+            sorted.removeIf(receipt -> receipt.archived);
+        }
         sorted.sort((left, right) -> Long.compare(right.createdAt, left.createdAt));
         return sorted;
     }
 
+    public List<Receipt> getArchivedReceipts() {
+        List<Receipt> archived = new ArrayList<>();
+        for (Receipt receipt : receipts) {
+            if (receipt.archived) {
+                archived.add(receipt);
+            }
+        }
+        archived.sort((left, right) -> Long.compare(right.createdAt, left.createdAt));
+        return archived;
+    }
+
     public List<Receipt> getReceiptsForCategory(String categoryId) {
+        return getReceiptsForCategory(categoryId, false);
+    }
+
+    public List<Receipt> getReceiptsForCategory(String categoryId, boolean includeArchived) {
         List<Receipt> filtered = new ArrayList<>();
         for (Receipt receipt : receipts) {
-            if (receipt.categoryId.equals(categoryId)) {
+            if (receipt.categoryId.equals(categoryId) && (includeArchived || !receipt.archived)) {
                 filtered.add(receipt);
             }
         }
@@ -74,7 +102,7 @@ public class ReceiptStore {
 
     public Category getCategory(String categoryId) {
         for (Category category : categories) {
-            if (category.id.equals(categoryId)) {
+            if (category.id.equals(categoryId) && !category.deleted) {
                 return category;
             }
         }
@@ -97,6 +125,11 @@ public class ReceiptStore {
     public Category addCategory(String name, String icon) {
         Category existing = findCategoryByName(name);
         if (existing != null) {
+            if (existing.deleted) {
+                existing.deleted = false;
+                existing.icon = cleanIcon(icon);
+                save();
+            }
             return existing;
         }
 
@@ -138,10 +171,57 @@ public class ReceiptStore {
         }
     }
 
+    public void setReceiptArchived(String receiptId, boolean archived) {
+        Receipt receipt = getReceipt(receiptId);
+        if (receipt != null) {
+            receipt.archived = archived;
+            save();
+        }
+    }
+
+    public boolean deleteReceipt(String receiptId) {
+        for (int index = 0; index < receipts.size(); index++) {
+            Receipt receipt = receipts.get(index);
+            if (receipt.id.equals(receiptId)) {
+                receipts.remove(index);
+                deletePhoto(receipt);
+                save();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public boolean deleteCategory(String categoryId) {
+        Category category = getCategory(categoryId);
+        if (category == null) {
+            return false;
+        }
+        category.deleted = true;
+        List<Receipt> deletedReceipts = new ArrayList<>();
+        for (Receipt receipt : receipts) {
+            if (receipt.categoryId.equals(categoryId)) {
+                deletedReceipts.add(receipt);
+            }
+        }
+        receipts.removeAll(deletedReceipts);
+        for (Receipt receipt : deletedReceipts) {
+            deletePhoto(receipt);
+        }
+        save();
+        return true;
+    }
+
     public double totalForCategory(String categoryId, DateFilter filter) {
+        return totalForCategory(categoryId, filter, false);
+    }
+
+    public double totalForCategory(String categoryId, DateFilter filter, boolean includeArchived) {
         double total = 0;
         for (Receipt receipt : receipts) {
-            if (receipt.categoryId.equals(categoryId) && filter.matches(receipt.date)) {
+            if (receipt.categoryId.equals(categoryId)
+                    && (includeArchived || !receipt.archived)
+                    && filter.matches(receipt.date)) {
                 total += receipt.total;
             }
         }
@@ -258,7 +338,7 @@ public class ReceiptStore {
                 changed = true;
             } else {
                 Category existing = findCategoryByName(name);
-                if (existing != null && (existing.icon == null || existing.icon.trim().isEmpty())) {
+                if (existing != null && !existing.deleted && (existing.icon == null || existing.icon.trim().isEmpty())) {
                     existing.icon = categoryInfo[1];
                     changed = true;
                 }
@@ -344,7 +424,7 @@ public class ReceiptStore {
         }
 
         for (Category category : importedCategories) {
-            categories.add(new Category(category.id, category.name, category.icon));
+            categories.add(new Category(category.id, category.name, category.icon, category.deleted));
         }
 
         int addedReceipts = 0;
@@ -361,6 +441,10 @@ public class ReceiptStore {
         for (Category importedCategory : importedCategories) {
             Category existing = findCategoryByName(importedCategory.name);
             if (existing != null) {
+                if (existing.deleted && !importedCategory.deleted) {
+                    existing.deleted = false;
+                    existing.icon = cleanIcon(importedCategory.icon);
+                }
                 categoryIds.put(importedCategory.id, existing.id);
                 continue;
             }
@@ -369,7 +453,7 @@ public class ReceiptStore {
             if (getCategory(categoryId) != null || categoryId == null || categoryId.trim().isEmpty()) {
                 categoryId = createCategoryId(importedCategory.name);
             }
-            categories.add(new Category(categoryId, importedCategory.name, cleanIcon(importedCategory.icon)));
+            categories.add(new Category(categoryId, importedCategory.name, cleanIcon(importedCategory.icon), importedCategory.deleted));
             categoryIds.put(importedCategory.id, categoryId);
             addedCategories++;
         }
@@ -425,8 +509,19 @@ public class ReceiptStore {
                 photoPath,
                 new ArrayList<>(receipt.items),
                 receipt.rawText,
-                receipt.createdAt
+                receipt.createdAt,
+                receipt.archived
         );
+    }
+
+    private void deletePhoto(Receipt receipt) {
+        if (receipt == null || receipt.photoPath == null || receipt.photoPath.trim().isEmpty()) {
+            return;
+        }
+        File photo = new File(receipt.photoPath);
+        if (photo.exists() && photo.isFile()) {
+            photo.delete();
+        }
     }
 
     private File uniquePhotoFile(String fileName) {

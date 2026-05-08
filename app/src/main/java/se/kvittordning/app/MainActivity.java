@@ -524,6 +524,10 @@ public class MainActivity extends ComponentActivity {
 
         addMonthlySummaryDashboard(content);
 
+        Button archive = iconButtonText(R.drawable.ic_folder, "Archived receipts");
+        content.addView(archive, compactButtonParams());
+        archive.setOnClickListener(view -> showArchivedReceipts());
+
         LinearLayout searchRow = row();
         EditText search = input("Search receipts");
         search.setInputType(InputType.TYPE_CLASS_TEXT);
@@ -586,6 +590,10 @@ public class MainActivity extends ComponentActivity {
         content.addView(editCategory, compactButtonParams());
         editCategory.setOnClickListener(view -> showEditCategoryDialog(category.id));
 
+        Button deleteCategory = iconButtonText(R.drawable.ic_close, "Delete category");
+        content.addView(deleteCategory, compactButtonParams());
+        deleteCategory.setOnClickListener(view -> confirmDeleteCategory(category.id));
+
         List<Receipt> receipts = receiptStore.getReceiptsForCategory(categoryId);
         if (receipts.isEmpty()) {
             content.addView(subtitle("No receipts in this category yet."));
@@ -602,16 +610,83 @@ public class MainActivity extends ComponentActivity {
 
     }
 
+    private void showArchivedReceipts() {
+        root.removeAllViews();
+        ScrollView scrollView = page("Archived receipts", this::showCategories);
+        LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
+
+        List<Receipt> archivedReceipts = receiptStore.getArchivedReceipts();
+        double total = 0;
+        for (Receipt receipt : archivedReceipts) {
+            if (activeFilter.matches(receipt.date)) {
+                total += receipt.total;
+            }
+        }
+        content.addView(subtitle("Archived total: " + money(total)));
+        content.addView(chip("Filter: " + activeFilter.label()));
+
+        if (archivedReceipts.isEmpty()) {
+            content.addView(subtitle("No archived receipts."));
+            return;
+        }
+
+        Map<String, Double> categoryTotals = new HashMap<>();
+        int visibleReceipts = 0;
+        for (Receipt receipt : archivedReceipts) {
+            if (!activeFilter.matches(receipt.date)) {
+                continue;
+            }
+            visibleReceipts++;
+            double categoryTotal = categoryTotals.containsKey(receipt.categoryId) ? categoryTotals.get(receipt.categoryId) : 0;
+            categoryTotals.put(receipt.categoryId, categoryTotal + receipt.total);
+        }
+        if (visibleReceipts == 0) {
+            content.addView(subtitle("No archived receipts match this filter."));
+            return;
+        }
+
+        content.addView(label("Archived category totals"));
+        List<Map.Entry<String, Double>> rankedCategories = new ArrayList<>(categoryTotals.entrySet());
+        Collections.sort(rankedCategories, (left, right) -> Double.compare(right.getValue(), left.getValue()));
+        double maxCategoryTotal = rankedCategories.isEmpty() ? 0 : rankedCategories.get(0).getValue();
+        for (Map.Entry<String, Double> entry : rankedCategories) {
+            Category category = receiptStore.getCategory(entry.getKey());
+            String name = category == null ? "Deleted category" : category.icon + " " + category.name;
+            content.addView(categorySpendRow(name, entry.getValue(), maxCategoryTotal), matchWrap());
+        }
+
+        content.addView(label("Receipts"));
+        for (Receipt receipt : archivedReceipts) {
+            if (!activeFilter.matches(receipt.date)) {
+                continue;
+            }
+            LinearLayout entry = receiptEntry(receipt);
+            entry.setOnClickListener(view -> showReceiptDetail(receipt.id, true));
+            content.addView(entry, matchWrap());
+        }
+    }
+
     private void showReceiptDetail(String receiptId) {
+        showReceiptDetail(receiptId, false);
+    }
+
+    private void showReceiptDetail(String receiptId, boolean fromArchiveView) {
         Receipt receipt = receiptStore.getReceipt(receiptId);
         if (receipt == null) {
-            showCategories();
+            if (fromArchiveView) {
+                showArchivedReceipts();
+            } else {
+                showCategories();
+            }
             return;
         }
 
         Category category = receiptStore.getCategory(receipt.categoryId);
         root.removeAllViews();
-        ScrollView scrollView = page(receipt.merchant, () -> showCategory(receipt.categoryId));
+        Runnable backAction = fromArchiveView || receipt.archived
+                ? this::showArchivedReceipts
+                : () -> showCategory(receipt.categoryId);
+        ScrollView scrollView = page(receipt.merchant, backAction);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
 
         ImageView photo = new ImageView(this);
@@ -620,7 +695,8 @@ public class MainActivity extends ComponentActivity {
         content.addView(photo, new LinearLayout.LayoutParams(match(), dp(210)));
         photo.setOnClickListener(view -> showFullscreenPhoto(receipt.id));
 
-        content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name)));
+        String status = receipt.archived ? " · Archived" : "";
+        content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name) + status));
         content.addView(title(money(receipt.total)));
 
         Button edit = iconButtonText(R.drawable.ic_edit, "Edit receipt");
@@ -630,6 +706,23 @@ public class MainActivity extends ComponentActivity {
         Button move = iconButtonText(R.drawable.ic_folder, "Move category");
         content.addView(move, compactButtonParams());
         move.setOnClickListener(view -> showMoveReceiptDialog(receipt.id));
+
+        Button archive = iconButtonText(R.drawable.ic_folder, receipt.archived ? "Restore receipt" : "Archive receipt");
+        content.addView(archive, compactButtonParams());
+        archive.setOnClickListener(view -> {
+            boolean archiveReceipt = !receipt.archived;
+            receiptStore.setReceiptArchived(receipt.id, archiveReceipt);
+            toast(archiveReceipt ? "Receipt archived." : "Receipt restored.");
+            if (archiveReceipt) {
+                showReceiptDetail(receipt.id, true);
+            } else {
+                showCategory(receipt.categoryId);
+            }
+        });
+
+        Button delete = iconButtonText(R.drawable.ic_close, "Delete receipt");
+        content.addView(delete, compactButtonParams());
+        delete.setOnClickListener(view -> confirmDeleteReceipt(receipt.id, fromArchiveView || receipt.archived));
 
         content.addView(label("Items"));
         LinearLayout itemTable = card();
@@ -651,6 +744,54 @@ public class MainActivity extends ComponentActivity {
         Button back = secondaryButton("Add another");
         content.addView(back, matchWrap());
         back.setOnClickListener(view -> showCamera());
+    }
+
+    private void confirmDeleteReceipt(String receiptId, boolean fromArchiveView) {
+        Receipt receipt = receiptStore.getReceipt(receiptId);
+        if (receipt == null) {
+            if (fromArchiveView) {
+                showArchivedReceipts();
+            } else {
+                showCategories();
+            }
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Delete receipt?")
+                .setMessage("This removes the receipt and its stored photo.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (dialog, which) -> {
+                    receiptStore.deleteReceipt(receiptId);
+                    toast("Receipt deleted.");
+                    if (fromArchiveView) {
+                        showArchivedReceipts();
+                    } else {
+                        showCategory(receipt.categoryId);
+                    }
+                })
+                .show();
+    }
+
+    private void confirmDeleteCategory(String categoryId) {
+        Category category = receiptStore.getCategory(categoryId);
+        if (category == null) {
+            showCategories();
+            return;
+        }
+        int receiptCount = receiptStore.getReceiptsForCategory(categoryId, true).size();
+        String message = receiptCount == 0
+                ? "This removes the category."
+                : "This removes the category, " + receiptCount + " receipts, and their stored photos.";
+        new AlertDialog.Builder(this)
+                .setTitle("Delete category?")
+                .setMessage(message)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Delete", (dialog, which) -> {
+                    receiptStore.deleteCategory(categoryId);
+                    toast("Category deleted.");
+                    showCategories();
+                })
+                .show();
     }
 
     private void showEditReceipt(String receiptId) {
@@ -775,7 +916,8 @@ public class MainActivity extends ComponentActivity {
                     receipt.photoPath,
                     updatedItems,
                     rawText.getText().toString(),
-                    receipt.createdAt
+                    receipt.createdAt,
+                    receipt.archived
             );
             receiptStore.updateReceipt(updatedReceipt);
             toast("Receipt updated.");

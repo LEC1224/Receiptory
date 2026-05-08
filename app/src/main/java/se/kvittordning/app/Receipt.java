@@ -17,6 +17,7 @@ public class Receipt {
     public List<ReceiptItem> items;
     public String rawText;
     public final long createdAt;
+    public boolean archived;
 
     public Receipt(
             String id,
@@ -29,6 +30,21 @@ public class Receipt {
             String rawText,
             long createdAt
     ) {
+        this(id, categoryId, merchant, date, total, photoPath, items, rawText, createdAt, false);
+    }
+
+    public Receipt(
+            String id,
+            String categoryId,
+            String merchant,
+            String date,
+            double total,
+            String photoPath,
+            List<ReceiptItem> items,
+            String rawText,
+            long createdAt,
+            boolean archived
+    ) {
         this.id = id;
         this.categoryId = categoryId;
         this.merchant = merchant;
@@ -38,6 +54,7 @@ public class Receipt {
         this.items = items;
         this.rawText = rawText;
         this.createdAt = createdAt;
+        this.archived = archived;
     }
 
     public static Receipt fromJson(JSONObject json) {
@@ -61,7 +78,8 @@ public class Receipt {
                 json.optString("photoPath"),
                 items,
                 json.optString("rawText"),
-                json.optLong("createdAt", 0)
+                json.optLong("createdAt", 0),
+                json.optBoolean("archived", false)
         );
     }
 
@@ -81,6 +99,9 @@ public class Receipt {
         json.put("items", itemArray);
         json.put("rawText", rawText);
         json.put("createdAt", createdAt);
+        if (archived) {
+            json.put("archived", true);
+        }
         return json;
     }
 }
