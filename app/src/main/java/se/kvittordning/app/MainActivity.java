@@ -193,11 +193,9 @@ public class MainActivity extends ComponentActivity {
         captureInProgress = false;
         shutterButton = null;
         shutterProgress = null;
-        root.removeAllViews();
         FrameLayout cameraRoot = new FrameLayout(this);
         cameraRoot.setBackgroundColor(Color.BLACK);
-        root.addView(cameraRoot, matchParent());
-        animateScreen(cameraRoot);
+        transitionRootView(cameraRoot, Color.BLACK);
         attachSwipe(cameraRoot, this::showCategories, this::showSettings);
 
         PreviewView previewView = new PreviewView(this);
@@ -316,11 +314,9 @@ public class MainActivity extends ComponentActivity {
     private void showCaptureReview(File photoFile) {
         currentBackAction = this::showCamera;
         pendingCapture = photoFile;
-        root.removeAllViews();
         FrameLayout reviewRoot = new FrameLayout(this);
         reviewRoot.setBackgroundColor(Color.BLACK);
-        root.addView(reviewRoot, matchParent());
-        animateScreen(reviewRoot);
+        transitionRootView(reviewRoot, Color.BLACK);
 
         ImageView imageView = new ImageView(this);
         loadPhoto(imageView, photoFile, 420, 760, ImageView.ScaleType.FIT_CENTER);
@@ -403,7 +399,6 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void showSettings() {
-        root.removeAllViews();
         ScrollView scrollView = page("Settings", this::showCamera);
         attachSwipe(scrollView, this::showCamera, null);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
@@ -542,7 +537,6 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void showCategories() {
-        root.removeAllViews();
         ScrollView scrollView = page("Storage", this::showCamera);
         attachSwipe(scrollView, null, this::showCamera);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
@@ -620,7 +614,6 @@ public class MainActivity extends ComponentActivity {
             return;
         }
 
-        root.removeAllViews();
         ScrollView scrollView = page(category.icon + " " + category.name, this::showCategories);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
         content.addView(subtitle("Total spent: " + money(receiptStore.totalForCategory(categoryId, activeFilter))));
@@ -652,7 +645,6 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void showArchivedReceipts() {
-        root.removeAllViews();
         ScrollView scrollView = page("Archived receipts", this::showCategories);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
 
@@ -725,7 +717,6 @@ public class MainActivity extends ComponentActivity {
         }
 
         Category category = receiptStore.getCategory(receipt.categoryId);
-        root.removeAllViews();
         Runnable backAction = fromArchiveView || receipt.archived
                 ? this::showArchivedReceipts
                 : () -> showCategory(receipt.categoryId);
@@ -844,7 +835,6 @@ public class MainActivity extends ComponentActivity {
             return;
         }
 
-        root.removeAllViews();
         ScrollView scrollView = page("Edit receipt", () -> showReceiptDetail(receiptId));
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
 
@@ -1589,11 +1579,9 @@ public class MainActivity extends ComponentActivity {
             fullscreenReceiptId = null;
             showReceiptDetail(receiptId);
         };
-        root.removeAllViews();
         FrameLayout photoRoot = new FrameLayout(this);
         photoRoot.setBackgroundColor(Color.BLACK);
-        root.addView(photoRoot, matchParent());
-        animateScreen(photoRoot);
+        transitionRootView(photoRoot, Color.BLACK);
 
         ImageView photo = new ImageView(this);
         loadPhoto(photo, new File(receipt.photoPath), 420, 760, ImageView.ScaleType.MATRIX);
@@ -1880,7 +1868,6 @@ public class MainActivity extends ComponentActivity {
 
     private void showLoading(String message) {
         currentBackAction = null;
-        root.removeAllViews();
         LinearLayout loading = new LinearLayout(this);
         loading.setOrientation(LinearLayout.VERTICAL);
         loading.setGravity(Gravity.CENTER);
@@ -1890,8 +1877,7 @@ public class MainActivity extends ComponentActivity {
         text.setGravity(Gravity.CENTER);
         loading.addView(progress);
         loading.addView(text);
-        root.addView(loading, matchParent());
-        animateScreen(loading);
+        transitionRootView(loading, palette.surface);
     }
 
     private ScrollView page(String titleText, Runnable backAction) {
@@ -1904,8 +1890,7 @@ public class MainActivity extends ComponentActivity {
         content.setPadding(dp(18), dp(18), dp(18), dp(34));
         scrollView.addView(content, matchWrap());
         content.addView(topBar(titleText, backAction), matchWrap());
-        root.addView(scrollView, matchParent());
-        animateScreen(scrollView);
+        transitionRootView(scrollView, palette.surface);
         return scrollView;
     }
 
@@ -2254,11 +2239,33 @@ public class MainActivity extends ComponentActivity {
         });
     }
 
-    private void animateScreen(View view) {
+    private void transitionRootView(View view, int backgroundColor) {
+        root.setBackgroundColor(backgroundColor);
+        List<View> oldViews = new ArrayList<>();
+        for (int index = 0; index < root.getChildCount(); index++) {
+            oldViews.add(root.getChildAt(index));
+        }
+
         view.setAlpha(0f);
+        view.setTranslationY(dp(6));
+        root.addView(view, matchParent());
+
+        for (View oldView : oldViews) {
+            oldView.animate().cancel();
+            oldView.setClickable(false);
+            oldView.animate()
+                    .alpha(0f)
+                    .setDuration(120)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .withEndAction(() -> root.removeView(oldView))
+                    .start();
+        }
+
+        view.animate().cancel();
         view.animate()
                 .alpha(1f)
-                .setDuration(120)
+                .translationY(0f)
+                .setDuration(oldViews.isEmpty() ? 120 : 170)
                 .setInterpolator(new DecelerateInterpolator())
                 .start();
     }
