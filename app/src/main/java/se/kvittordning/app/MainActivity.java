@@ -20,6 +20,7 @@ import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.ImageButton;
@@ -331,7 +332,8 @@ public class MainActivity extends ComponentActivity {
                         storedPhoto,
                         receiptStore.getCategories(),
                         apiKey,
-                        settingsStore.getModel()
+                        settingsStore.getModel(),
+                        settingsStore.allowAiNewCategories()
                 );
                 String categoryId = resolveCategoryId(extraction);
                 String receiptDate = extraction.date == null || extraction.date.isEmpty()
@@ -402,6 +404,14 @@ public class MainActivity extends ComponentActivity {
         EditText model = input("Model");
         model.setText(settingsStore.getModel());
         aiCard.addView(model, matchWrap());
+
+        CheckBox allowAiNewCategories = new CheckBox(this);
+        allowAiNewCategories.setText("Allow AI to suggest new category");
+        allowAiNewCategories.setTextColor(palette.text);
+        allowAiNewCategories.setTextSize(15);
+        allowAiNewCategories.setChecked(settingsStore.allowAiNewCategories());
+        allowAiNewCategories.setPadding(dp(6), dp(8), dp(6), dp(8));
+        aiCard.addView(allowAiNewCategories, matchWrap());
         content.addView(aiCard, matchWrap());
 
         LinearLayout moneyCard = card();
@@ -428,6 +438,7 @@ public class MainActivity extends ComponentActivity {
         save.setOnClickListener(view -> {
             settingsStore.setApiKey(apiKey.getText().toString());
             settingsStore.setModel(model.getText().toString());
+            settingsStore.setAllowAiNewCategories(allowAiNewCategories.isChecked());
             settingsStore.setCurrencyCode(currency.getText().toString());
             int checkedId = themeGroup.getCheckedRadioButtonId();
             View checked = themeGroup.findViewById(checkedId);

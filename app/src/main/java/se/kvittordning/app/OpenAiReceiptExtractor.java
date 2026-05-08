@@ -20,7 +20,13 @@ import java.util.List;
 public class OpenAiReceiptExtractor {
     private static final String RESPONSES_URL = "https://api.openai.com/v1/responses";
 
-    public ReceiptExtraction extract(File imageFile, List<Category> categories, String apiKey, String model)
+    public ReceiptExtraction extract(
+            File imageFile,
+            List<Category> categories,
+            String apiKey,
+            String model,
+            boolean allowNewCategories
+    )
             throws IOException, JSONException {
         if (apiKey == null || apiKey.trim().isEmpty()) {
             throw new IOException("Missing OpenAI API key.");
@@ -34,7 +40,7 @@ public class OpenAiReceiptExtractor {
         connection.setRequestProperty("Authorization", "Bearer " + apiKey.trim());
         connection.setRequestProperty("Content-Type", "application/json");
 
-        byte[] body = buildRequest(imageFile, categories, model).toString().getBytes(StandardCharsets.UTF_8);
+        byte[] body = buildRequest(imageFile, categories, model, allowNewCategories).toString().getBytes(StandardCharsets.UTF_8);
         try (OutputStream output = connection.getOutputStream()) {
             output.write(body);
         }
@@ -51,10 +57,15 @@ public class OpenAiReceiptExtractor {
         return ReceiptExtraction.fromJson(new JSONObject(outputText));
     }
 
-    private JSONObject buildRequest(File imageFile, List<Category> categories, String model) throws IOException, JSONException {
+    private JSONObject buildRequest(
+            File imageFile,
+            List<Category> categories,
+            String model,
+            boolean allowNewCategories
+    ) throws IOException, JSONException {
         JSONObject root = new JSONObject();
         root.put("model", model == null || model.trim().isEmpty() ? SettingsStore.DEFAULT_MODEL : model.trim());
-        root.put("instructions", buildInstructions(categories));
+        root.put("instructions", buildInstructions(categories, allowNewCategories));
         root.put("input", buildInput(imageFile));
         root.put("text", buildTextFormat());
         return root;
@@ -169,14 +180,21 @@ public class OpenAiReceiptExtractor {
         return schema;
     }
 
-    private String buildInstructions(List<Category> categories) {
+    private String buildInstructions(List<Category> categories, boolean allowNewCategories) {
         StringBuilder builder = new StringBuilder();
         builder.append("You extract purchase data from receipt photos for an expense manager. ");
         builder.append("Return the receipt merchant, ISO date, item rows, total, and raw transcribed text. ");
-        builder.append("Choose the best existing category if one fits. ");
-        builder.append("If none fit, set category_decision.action to create_new, leave existing_category_id empty, ");
-        builder.append("and provide a concise reusable category name in new_category_name. ");
-        builder.append("If using an existing category, set action to use_existing, provide its id, and leave new_category_name empty. ");
+        if (allowNewCategories) {
+            builder.append("Choose the best existing category if one fits. ");
+            builder.append("If none fit, set category_decision.action to create_new, leave existing_category_id empty, ");
+            builder.append("and provide a concise reusable category name in new_category_name. ");
+            builder.append("If using an existing category, set action to use_existing, provide its id, and leave new_category_name empty. ");
+        } else {
+            builder.append("You MUST place this receipt into one of the existing categories provided below. ");
+            builder.append("Do not create or propose a new category under any circumstances. ");
+            builder.append("Always set category_decision.action to use_existing, set existing_category_id to exactly one supplied category id, ");
+            builder.append("and set new_category_name to an empty string. ");
+        }
         builder.append("Existing categories:\n");
         for (Category category : categories) {
             builder.append("- id: ").append(category.id).append(", name: ").append(category.name).append('\n');

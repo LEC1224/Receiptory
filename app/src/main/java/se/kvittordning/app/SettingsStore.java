@@ -14,6 +14,7 @@ public class SettingsStore {
 
     private static final String PREFS = "kvittordning_settings";
     private static final String KEY_API_KEY = "api_key";
+    private static final String KEY_ALLOW_AI_NEW_CATEGORIES = "allow_ai_new_categories";
     private static final String KEY_CURRENCY = "currency";
     private static final String KEY_MODEL = "model";
     private static final String KEY_THEME = "theme";
@@ -43,6 +44,14 @@ public class SettingsStore {
     public void setModel(String model) {
         String cleanModel = model == null ? "" : model.trim();
         preferences.edit().putString(KEY_MODEL, cleanModel.isEmpty() ? DEFAULT_MODEL : cleanModel).apply();
+    }
+
+    public boolean allowAiNewCategories() {
+        return preferences.getBoolean(KEY_ALLOW_AI_NEW_CATEGORIES, true);
+    }
+
+    public void setAllowAiNewCategories(boolean allow) {
+        preferences.edit().putBoolean(KEY_ALLOW_AI_NEW_CATEGORIES, allow).apply();
     }
 
     public String getCurrencyCode() {
