@@ -123,17 +123,27 @@ public class ReceiptStore {
     }
 
     public Category addCategory(String name, String icon) {
+        return addCategory(name, icon, false);
+    }
+
+    public Category addAiSuggestedCategory(String name) {
+        return addCategory(name, chooseIconForName(name), true);
+    }
+
+    private Category addCategory(String name, String icon, boolean aiSuggested) {
         Category existing = findCategoryByName(name);
         if (existing != null) {
             if (existing.deleted) {
                 existing.deleted = false;
                 existing.icon = cleanIcon(icon);
+                existing.aiSuggested = aiSuggested;
                 save();
             }
             return existing;
         }
 
         Category category = new Category(createCategoryId(name), name.trim(), cleanIcon(icon));
+        category.aiSuggested = aiSuggested;
         categories.add(category);
         save();
         return category;
@@ -169,6 +179,19 @@ public class ReceiptStore {
             receipt.categoryId = categoryId;
             save();
         }
+    }
+
+    public boolean deleteEmptyAiSuggestedCategory(String categoryId) {
+        Category category = getCategory(categoryId);
+        if (category == null || !category.aiSuggested) {
+            return false;
+        }
+        if (!getReceiptsForCategory(categoryId, true).isEmpty()) {
+            return false;
+        }
+        category.deleted = true;
+        save();
+        return true;
     }
 
     public void setReceiptArchived(String receiptId, boolean archived) {
@@ -424,7 +447,7 @@ public class ReceiptStore {
         }
 
         for (Category category : importedCategories) {
-            categories.add(new Category(category.id, category.name, category.icon, category.deleted));
+            categories.add(new Category(category.id, category.name, category.icon, category.deleted, category.aiSuggested));
         }
 
         int addedReceipts = 0;
@@ -453,7 +476,13 @@ public class ReceiptStore {
             if (getCategory(categoryId) != null || categoryId == null || categoryId.trim().isEmpty()) {
                 categoryId = createCategoryId(importedCategory.name);
             }
-            categories.add(new Category(categoryId, importedCategory.name, cleanIcon(importedCategory.icon), importedCategory.deleted));
+            categories.add(new Category(
+                    categoryId,
+                    importedCategory.name,
+                    cleanIcon(importedCategory.icon),
+                    importedCategory.deleted,
+                    importedCategory.aiSuggested
+            ));
             categoryIds.put(importedCategory.id, categoryId);
             addedCategories++;
         }

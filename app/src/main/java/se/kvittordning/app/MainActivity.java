@@ -373,7 +373,7 @@ public class MainActivity extends ComponentActivity {
         String name = extraction.newCategoryName == null || extraction.newCategoryName.isEmpty()
                 ? "Other"
                 : extraction.newCategoryName;
-        return receiptStore.addCategory(name).id;
+        return receiptStore.addAiSuggestedCategory(name).id;
     }
 
     private void showSettings() {
@@ -1402,6 +1402,11 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void showMoveReceiptDialog(String receiptId) {
+        Receipt receipt = receiptStore.getReceipt(receiptId);
+        if (receipt == null) {
+            return;
+        }
+        String originalCategoryId = receipt.categoryId;
         List<Category> categories = receiptStore.getCategories();
         String[] names = new String[categories.size()];
         for (int index = 0; index < categories.size(); index++) {
@@ -1410,7 +1415,12 @@ public class MainActivity extends ComponentActivity {
         new AlertDialog.Builder(this)
                 .setTitle("Move receipt")
                 .setItems(names, (dialog, which) -> {
-                    receiptStore.moveReceipt(receiptId, categories.get(which).id);
+                    String newCategoryId = categories.get(which).id;
+                    receiptStore.moveReceipt(receiptId, newCategoryId);
+                    if (!originalCategoryId.equals(newCategoryId)
+                            && receiptStore.deleteEmptyAiSuggestedCategory(originalCategoryId)) {
+                        toast("Removed empty AI-suggested category.");
+                    }
                     showReceiptDetail(receiptId);
                 })
                 .show();
