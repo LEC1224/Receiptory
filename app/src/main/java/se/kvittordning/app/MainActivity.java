@@ -52,10 +52,14 @@ import java.text.NumberFormat;
 import java.text.Normalizer;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.Calendar;
+import java.util.Collections;
 import java.util.Currency;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -481,6 +485,8 @@ public class MainActivity extends ComponentActivity {
         filter.setOnClickListener(view -> showFilterDialog());
         addCategory.setOnClickListener(view -> showCreateCategoryDialog());
 
+        addMonthlySummaryDashboard(content);
+
         LinearLayout searchRow = row();
         EditText search = input("Search receipts");
         search.setInputType(InputType.TYPE_CLASS_TEXT);
@@ -791,6 +797,220 @@ public class MainActivity extends ComponentActivity {
                     dialog.dismiss();
                 })
                 .show();
+    }
+
+    private void addMonthlySummaryDashboard(LinearLayout content) {
+        String currentMonth = monthKey(0);
+        String previousMonth = monthKey(-1);
+        double currentTotal = totalForMonth(currentMonth);
+        double previousTotal = totalForMonth(previousMonth);
+        double difference = currentTotal - previousTotal;
+
+        LinearLayout summary = card();
+        summary.addView(label("Monthly summary"));
+        summary.addView(subtitle(monthLabel(0) + " compared with " + monthLabel(-1)));
+
+        LinearLayout totals = row();
+        totals.setGravity(Gravity.CENTER_VERTICAL);
+        totals.addView(summaryMetric("This month", money(currentTotal)), new LinearLayout.LayoutParams(0, wrap(), 1));
+        LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(0, wrap(), 1);
+        previousParams.leftMargin = dp(10);
+        totals.addView(summaryMetric("Last month", money(previousTotal)), previousParams);
+        summary.addView(totals, matchWrap());
+
+        String differenceText = difference >= 0 ? "+" + money(difference) : money(difference);
+        TextView change = chip("Difference: " + differenceText);
+        change.setTextColor(difference > 0 ? palette.accent : palette.muted);
+        summary.addView(change);
+
+        List<Receipt> monthReceipts = receiptsForMonth(currentMonth);
+        List<Receipt> comparisonReceipts = monthReceipts.isEmpty() ? receiptStore.getReceipts() : monthReceipts;
+        boolean usingAllTimeFallback = monthReceipts.isEmpty() && !comparisonReceipts.isEmpty();
+
+        addTopCategories(summary, comparisonReceipts, usingAllTimeFallback);
+        addBiggestPurchases(summary, comparisonReceipts, usingAllTimeFallback);
+        addRecentReceipts(summary);
+
+        if (receiptStore.getReceipts().isEmpty()) {
+            summary.addView(subtitle("Add a receipt to start seeing monthly totals, category trends, and recent activity."));
+        }
+
+        content.addView(summary, matchWrap());
+    }
+
+    private LinearLayout summaryMetric(String caption, String value) {
+        LinearLayout metric = new LinearLayout(this);
+        metric.setOrientation(LinearLayout.VERTICAL);
+        metric.setPadding(dp(12), dp(10), dp(12), dp(10));
+        metric.setBackground(rounded(palette.chip, dp(16)));
+
+        TextView captionView = subtitle(caption);
+        captionView.setTextSize(13);
+        captionView.setPadding(0, 0, 0, dp(4));
+        metric.addView(captionView);
+
+        TextView valueView = title(value);
+        valueView.setTextSize(20);
+        metric.addView(valueView);
+        return metric;
+    }
+
+    private void addTopCategories(LinearLayout summary, List<Receipt> receipts, boolean usingAllTimeFallback) {
+        summary.addView(label("Top categories"));
+        if (receipts.isEmpty()) {
+            summary.addView(subtitle("No category spending yet."));
+            return;
+        }
+
+        Map<String, Double> totals = new HashMap<>();
+        for (Receipt receipt : receipts) {
+            double current = totals.containsKey(receipt.categoryId) ? totals.get(receipt.categoryId) : 0;
+            totals.put(receipt.categoryId, current + receipt.total);
+        }
+
+        List<Map.Entry<String, Double>> ranked = new ArrayList<>(totals.entrySet());
+        Collections.sort(ranked, (left, right) -> Double.compare(right.getValue(), left.getValue()));
+        double max = ranked.isEmpty() ? 0 : ranked.get(0).getValue();
+        int shown = Math.min(3, ranked.size());
+        for (int index = 0; index < shown; index++) {
+            Map.Entry<String, Double> entry = ranked.get(index);
+            Category category = receiptStore.getCategory(entry.getKey());
+            String name = category == null ? "Uncategorized" : category.icon + " " + category.name;
+            summary.addView(categorySpendRow(name, entry.getValue(), max), matchWrap());
+        }
+        if (usingAllTimeFallback) {
+            summary.addView(subtitle("No receipts this month yet, so this uses all-time category totals."));
+        }
+    }
+
+    private LinearLayout categorySpendRow(String name, double total, double max) {
+        LinearLayout container = new LinearLayout(this);
+        container.setOrientation(LinearLayout.VERTICAL);
+        container.setPadding(0, dp(4), 0, dp(6));
+
+        LinearLayout header = row();
+        header.setPadding(0, 0, 0, dp(4));
+        TextView nameView = subtitle(name);
+        nameView.setTextColor(palette.text);
+        header.addView(nameView, new LinearLayout.LayoutParams(0, wrap(), 1));
+        TextView totalView = subtitle(money(total));
+        totalView.setGravity(Gravity.END);
+        header.addView(totalView, new LinearLayout.LayoutParams(dp(116), wrap()));
+        container.addView(header, matchWrap());
+
+        LinearLayout track = new LinearLayout(this);
+        track.setOrientation(LinearLayout.HORIZONTAL);
+        track.setBackground(rounded(palette.iconWell, dp(999)));
+        LinearLayout.LayoutParams trackParams = new LinearLayout.LayoutParams(match(), dp(8));
+        container.addView(track, trackParams);
+
+        View fill = new View(this);
+        fill.setBackground(rounded(palette.accent, dp(999)));
+        int fillWeight = max <= 0 ? 1 : Math.max(1, (int) Math.round((total / max) * 100));
+        track.addView(fill, new LinearLayout.LayoutParams(0, dp(8), fillWeight));
+        track.addView(new View(this), new LinearLayout.LayoutParams(0, dp(8), Math.max(0, 100 - fillWeight)));
+        return container;
+    }
+
+    private void addBiggestPurchases(LinearLayout summary, List<Receipt> receipts, boolean usingAllTimeFallback) {
+        summary.addView(label("Biggest purchases"));
+        if (receipts.isEmpty()) {
+            summary.addView(subtitle("No purchases to rank yet."));
+            return;
+        }
+
+        List<Receipt> ranked = new ArrayList<>(receipts);
+        Collections.sort(ranked, (left, right) -> Double.compare(right.total, left.total));
+        int shown = Math.min(3, ranked.size());
+        for (int index = 0; index < shown; index++) {
+            Receipt receipt = ranked.get(index);
+            LinearLayout entry = compactReceiptEntry(receipt);
+            entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
+            summary.addView(entry, matchWrap());
+        }
+        if (usingAllTimeFallback) {
+            summary.addView(subtitle("No receipts this month yet, so this shows your biggest saved purchases."));
+        }
+    }
+
+    private void addRecentReceipts(LinearLayout summary) {
+        summary.addView(label("Recent receipts"));
+        List<Receipt> recent = receiptStore.getReceipts();
+        if (recent.isEmpty()) {
+            summary.addView(subtitle("Recent receipts will appear here as soon as you save one."));
+            return;
+        }
+
+        int shown = Math.min(3, recent.size());
+        for (int index = 0; index < shown; index++) {
+            Receipt receipt = recent.get(index);
+            LinearLayout entry = compactReceiptEntry(receipt);
+            entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
+            summary.addView(entry, matchWrap());
+        }
+    }
+
+    private LinearLayout compactReceiptEntry(Receipt receipt) {
+        LinearLayout entry = row();
+        entry.setPadding(dp(10), dp(8), dp(10), dp(8));
+        entry.setBackground(roundedStroke(palette.input, dp(14), palette.stroke, 1));
+        LinearLayout.LayoutParams params = matchWrap();
+        params.topMargin = dp(8);
+        entry.setLayoutParams(params);
+
+        LinearLayout copy = new LinearLayout(this);
+        copy.setOrientation(LinearLayout.VERTICAL);
+        TextView merchant = title(receipt.merchant == null || receipt.merchant.trim().isEmpty() ? "Receipt" : receipt.merchant);
+        merchant.setTextSize(17);
+        Category category = receiptStore.getCategory(receipt.categoryId);
+        String detail = receipt.date + " · " + (category == null ? "Uncategorized" : category.name);
+        TextView meta = subtitle(detail);
+        meta.setTextSize(14);
+        copy.addView(merchant);
+        copy.addView(meta);
+        entry.addView(copy, new LinearLayout.LayoutParams(0, wrap(), 1));
+
+        TextView total = title(money(receipt.total));
+        total.setGravity(Gravity.END);
+        total.setTextSize(17);
+        entry.addView(total, new LinearLayout.LayoutParams(dp(116), wrap()));
+        return entry;
+    }
+
+    private List<Receipt> receiptsForMonth(String yyyyMm) {
+        List<Receipt> matches = new ArrayList<>();
+        for (Receipt receipt : receiptStore.getReceipts()) {
+            if (dateMatchesMonth(receipt.date, yyyyMm)) {
+                matches.add(receipt);
+            }
+        }
+        return matches;
+    }
+
+    private double totalForMonth(String yyyyMm) {
+        double total = 0;
+        for (Receipt receipt : receiptStore.getReceipts()) {
+            if (dateMatchesMonth(receipt.date, yyyyMm)) {
+                total += receipt.total;
+            }
+        }
+        return total;
+    }
+
+    private boolean dateMatchesMonth(String date, String yyyyMm) {
+        return date != null && date.length() >= 7 && date.startsWith(yyyyMm);
+    }
+
+    private String monthKey(int offsetMonths) {
+        Calendar calendar = Calendar.getInstance();
+        calendar.add(Calendar.MONTH, offsetMonths);
+        return new SimpleDateFormat("yyyy-MM", Locale.getDefault()).format(calendar.getTime());
+    }
+
+    private String monthLabel(int offsetMonths) {
+        Calendar calendar = Calendar.getInstance();
+        calendar.add(Calendar.MONTH, offsetMonths);
+        return new SimpleDateFormat("MMMM yyyy", Locale.getDefault()).format(calendar.getTime());
     }
 
     private LinearLayout receiptEntry(Receipt receipt) {
