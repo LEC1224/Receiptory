@@ -11,14 +11,14 @@ import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
 import android.net.Uri;
 import android.os.Bundle;
-import android.text.Editable;
 import android.text.InputType;
-import android.text.TextWatcher;
 import android.view.Gravity;
+import android.view.KeyEvent;
 import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -481,10 +481,17 @@ public class MainActivity extends ComponentActivity {
         filter.setOnClickListener(view -> showFilterDialog());
         addCategory.setOnClickListener(view -> showCreateCategoryDialog());
 
+        LinearLayout searchRow = row();
         EditText search = input("Search receipts");
         search.setInputType(InputType.TYPE_CLASS_TEXT);
+        search.setImeOptions(EditorInfo.IME_ACTION_SEARCH);
         search.setText(storageSearchQuery);
-        content.addView(search, matchWrap());
+        LinearLayout.LayoutParams searchParams = new LinearLayout.LayoutParams(0, dp(52), 1);
+        searchParams.rightMargin = dp(10);
+        searchRow.addView(search, searchParams);
+        ImageButton searchButton = toolbarIconButton(R.drawable.ic_search);
+        searchRow.addView(searchButton, new LinearLayout.LayoutParams(dp(52), dp(52)));
+        content.addView(searchRow, matchWrap());
 
         LinearLayout searchResults = new LinearLayout(this);
         searchResults.setOrientation(LinearLayout.VERTICAL);
@@ -500,20 +507,22 @@ public class MainActivity extends ComponentActivity {
             categoryList.addView(card, matchWrap());
         }
         renderStorageSearchResults(storageSearchQuery, searchResults, categoryList);
-        search.addTextChangedListener(new TextWatcher() {
-            @Override
-            public void beforeTextChanged(CharSequence text, int start, int count, int after) {
+        Runnable runSearch = () -> {
+            storageSearchQuery = search.getText().toString();
+            renderStorageSearchResults(storageSearchQuery, searchResults, categoryList);
+        };
+        searchButton.setOnClickListener(view -> runSearch.run());
+        search.setOnEditorActionListener((view, actionId, event) -> {
+            boolean keyboardSearch = actionId == EditorInfo.IME_ACTION_SEARCH
+                    || actionId == EditorInfo.IME_ACTION_DONE;
+            boolean enterKey = event != null
+                    && event.getAction() == KeyEvent.ACTION_UP
+                    && event.getKeyCode() == KeyEvent.KEYCODE_ENTER;
+            if (keyboardSearch || enterKey) {
+                runSearch.run();
+                return true;
             }
-
-            @Override
-            public void onTextChanged(CharSequence text, int start, int before, int count) {
-                storageSearchQuery = text == null ? "" : text.toString();
-                renderStorageSearchResults(storageSearchQuery, searchResults, categoryList);
-            }
-
-            @Override
-            public void afterTextChanged(Editable editable) {
-            }
+            return false;
         });
 
     }
