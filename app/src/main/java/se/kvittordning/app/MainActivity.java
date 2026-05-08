@@ -859,8 +859,14 @@ public class MainActivity extends ComponentActivity {
         textCard.addView(rawText, matchWrap());
         content.addView(textCard, matchWrap());
 
+        LinearLayout actions = row();
+        Button cancel = secondaryButton("Cancel");
+        actions.addView(cancel, weightedButton());
+        cancel.setOnClickListener(view -> showReceiptDetail(receiptId));
+
         Button save = primaryButton("Save changes");
-        content.addView(save, matchWrap());
+        actions.addView(save, weightedButton());
+        content.addView(actions, matchWrap());
         save.setOnClickListener(view -> {
             String merchantValue = merchant.getText().toString().trim();
             String dateValue = date.getText().toString().trim();
@@ -937,7 +943,9 @@ public class MainActivity extends ComponentActivity {
         LinearLayout costRow = row();
         EditText cost = input("Cost");
         cost.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
-        cost.setText(formatDecimal(costValue));
+        if (!nameValue.isEmpty() || costValue != 0) {
+            cost.setText(formatDecimal(costValue));
+        }
         costRow.addView(cost, new LinearLayout.LayoutParams(0, dp(52), 1));
 
         ImageButton delete = toolbarIconButton(R.drawable.ic_close);
