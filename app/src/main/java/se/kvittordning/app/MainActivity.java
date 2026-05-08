@@ -1,6 +1,9 @@
 package se.kvittordning.app;
 
 import android.Manifest;
+import android.animation.Animator;
+import android.animation.AnimatorListenerAdapter;
+import android.animation.ValueAnimator;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -1026,8 +1029,34 @@ public class MainActivity extends ComponentActivity {
         double difference = currentTotal - previousTotal;
 
         LinearLayout summary = card();
-        summary.addView(label("Monthly summary"));
-        summary.addView(subtitle(monthLabel(0) + " compared with " + monthLabel(-1)));
+        LinearLayout header = row();
+        header.setPadding(0, 0, 0, dp(2));
+        installPressFeedback(header);
+
+        LinearLayout headerCopy = new LinearLayout(this);
+        headerCopy.setOrientation(LinearLayout.VERTICAL);
+        TextView heading = label("Monthly summary");
+        heading.setPadding(0, 0, 0, dp(4));
+        headerCopy.addView(heading);
+        TextView range = subtitle(monthLabel(0) + " compared with " + monthLabel(-1));
+        range.setTextSize(14);
+        range.setPadding(0, 0, 0, 0);
+        headerCopy.addView(range);
+        header.addView(headerCopy, new LinearLayout.LayoutParams(0, wrap(), 1));
+
+        TextView toggle = subtitle("Show");
+        toggle.setTextColor(palette.accent);
+        toggle.setTextSize(14);
+        toggle.setGravity(Gravity.CENTER);
+        toggle.setBackground(rounded(palette.chip, dp(999)));
+        toggle.setPadding(dp(14), dp(8), dp(14), dp(8));
+        header.addView(toggle, new LinearLayout.LayoutParams(wrap(), wrap()));
+        summary.addView(header, matchWrap());
+
+        LinearLayout details = new LinearLayout(this);
+        details.setOrientation(LinearLayout.VERTICAL);
+        details.setVisibility(View.GONE);
+        details.setAlpha(0f);
 
         LinearLayout totals = row();
         totals.setGravity(Gravity.CENTER_VERTICAL);
@@ -1035,26 +1064,115 @@ public class MainActivity extends ComponentActivity {
         LinearLayout.LayoutParams previousParams = new LinearLayout.LayoutParams(0, wrap(), 1);
         previousParams.leftMargin = dp(10);
         totals.addView(summaryMetric("Last month", money(previousTotal)), previousParams);
-        summary.addView(totals, matchWrap());
+        details.addView(totals, matchWrap());
 
         String differenceText = difference >= 0 ? "+" + money(difference) : money(difference);
         TextView change = chip("Difference: " + differenceText);
         change.setTextColor(difference > 0 ? palette.accent : palette.muted);
-        summary.addView(change);
+        details.addView(change);
 
         List<Receipt> monthReceipts = receiptsForMonth(currentMonth);
         List<Receipt> comparisonReceipts = monthReceipts.isEmpty() ? receiptStore.getReceipts() : monthReceipts;
         boolean usingAllTimeFallback = monthReceipts.isEmpty() && !comparisonReceipts.isEmpty();
 
-        addTopCategories(summary, comparisonReceipts, usingAllTimeFallback);
-        addBiggestPurchases(summary, comparisonReceipts, usingAllTimeFallback);
-        addRecentReceipts(summary);
+        addTopCategories(details, comparisonReceipts, usingAllTimeFallback);
+        addBiggestPurchases(details, comparisonReceipts, usingAllTimeFallback);
+        addRecentReceipts(details);
 
         if (receiptStore.getReceipts().isEmpty()) {
-            summary.addView(subtitle("Add a receipt to start seeing monthly totals, category trends, and recent activity."));
+            details.addView(subtitle("Add a receipt to start seeing monthly totals, category trends, and recent activity."));
         }
 
+        summary.addView(details, matchWrap());
+        final boolean[] expanded = {false};
+        header.setOnClickListener(view -> {
+            expanded[0] = !expanded[0];
+            setMonthlySummaryExpanded(details, toggle, expanded[0]);
+        });
+
         content.addView(summary, matchWrap());
+    }
+
+    private void setMonthlySummaryExpanded(LinearLayout details, TextView toggle, boolean expanded) {
+        toggle.setText(expanded ? "Hide" : "Show");
+        toggle.animate()
+                .scaleX(0.94f)
+                .scaleY(0.94f)
+                .setDuration(60)
+                .withEndAction(() -> toggle.animate().scaleX(1f).scaleY(1f).setDuration(100).start())
+                .start();
+
+        if (expanded) {
+            View parent = (View) details.getParent();
+            int availableWidth = parent.getWidth() - parent.getPaddingLeft() - parent.getPaddingRight();
+            if (availableWidth <= 0) {
+                details.post(() -> setMonthlySummaryExpanded(details, toggle, true));
+                return;
+            }
+
+            details.setVisibility(View.VISIBLE);
+            details.setAlpha(0f);
+            details.setTranslationY(-dp(6));
+            details.measure(
+                    View.MeasureSpec.makeMeasureSpec(availableWidth, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            );
+            int targetHeight = details.getMeasuredHeight();
+            ViewGroup.LayoutParams params = details.getLayoutParams();
+            params.height = 0;
+            details.setLayoutParams(params);
+
+            ValueAnimator animator = ValueAnimator.ofInt(0, targetHeight);
+            animator.setDuration(220);
+            animator.setInterpolator(new DecelerateInterpolator());
+            animator.addUpdateListener(animation -> {
+                params.height = (int) animation.getAnimatedValue();
+                details.setLayoutParams(params);
+            });
+            animator.addListener(new AnimatorListenerAdapter() {
+                @Override
+                public void onAnimationEnd(Animator animation) {
+                    params.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                    details.setLayoutParams(params);
+                }
+            });
+            animator.start();
+            details.animate()
+                    .alpha(1f)
+                    .translationY(0f)
+                    .setDuration(180)
+                    .setInterpolator(new DecelerateInterpolator())
+                    .start();
+            return;
+        }
+
+        int startHeight = details.getHeight();
+        ViewGroup.LayoutParams params = details.getLayoutParams();
+        params.height = startHeight;
+        details.setLayoutParams(params);
+
+        ValueAnimator animator = ValueAnimator.ofInt(startHeight, 0);
+        animator.setDuration(180);
+        animator.setInterpolator(new DecelerateInterpolator());
+        animator.addUpdateListener(animation -> {
+            params.height = (int) animation.getAnimatedValue();
+            details.setLayoutParams(params);
+        });
+        animator.addListener(new AnimatorListenerAdapter() {
+            @Override
+            public void onAnimationEnd(Animator animation) {
+                details.setVisibility(View.GONE);
+                params.height = ViewGroup.LayoutParams.WRAP_CONTENT;
+                details.setLayoutParams(params);
+            }
+        });
+        animator.start();
+        details.animate()
+                .alpha(0f)
+                .translationY(-dp(6))
+                .setDuration(120)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
     }
 
     private LinearLayout summaryMetric(String caption, String value) {
