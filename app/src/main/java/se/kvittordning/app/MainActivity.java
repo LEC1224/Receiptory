@@ -707,6 +707,10 @@ public class MainActivity extends ComponentActivity {
         content.addView(move, compactButtonParams());
         move.setOnClickListener(view -> showMoveReceiptDialog(receipt.id));
 
+        Button addAnother = iconButtonText(R.drawable.ic_receipt, "Add another");
+        content.addView(addAnother, compactButtonParams());
+        addAnother.setOnClickListener(view -> showCamera());
+
         Button archive = iconButtonText(R.drawable.ic_folder, receipt.archived ? "Restore receipt" : "Archive receipt");
         content.addView(archive, compactButtonParams());
         archive.setOnClickListener(view -> {
@@ -740,10 +744,6 @@ public class MainActivity extends ComponentActivity {
         LinearLayout rawTextCard = card();
         rawTextCard.addView(subtitle(receipt.rawText.isEmpty() ? "No raw text returned." : receipt.rawText));
         content.addView(rawTextCard, matchWrap());
-
-        Button back = secondaryButton("Add another");
-        content.addView(back, matchWrap());
-        back.setOnClickListener(view -> showCamera());
     }
 
     private void confirmDeleteReceipt(String receiptId, boolean fromArchiveView) {
@@ -1646,11 +1646,12 @@ public class MainActivity extends ComponentActivity {
 
     private Button iconButtonText(int iconRes, String text) {
         Button button = secondaryButton(text);
+        button.setPadding(dp(18), 0, dp(18), 0);
         Drawable icon = ContextCompat.getDrawable(this, iconRes);
         if (icon != null) {
             icon.setTint(palette.accent);
             button.setCompoundDrawablesWithIntrinsicBounds(icon, null, null, null);
-            button.setCompoundDrawablePadding(dp(8));
+            button.setCompoundDrawablePadding(dp(12));
         }
         return button;
     }
