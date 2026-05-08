@@ -5,20 +5,30 @@ import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.content.res.Configuration;
+import android.content.res.ColorStateList;
+import android.graphics.Bitmap;
+import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Matrix;
+import android.graphics.RectF;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.InputType;
+import android.util.LruCache;
 import android.view.Gravity;
+import android.view.GestureDetector;
 import android.view.KeyEvent;
 import android.view.MotionEvent;
+import android.view.ScaleGestureDetector;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.WindowInsets;
 import android.view.inputmethod.EditorInfo;
+import android.view.animation.DecelerateInterpolator;
 import android.widget.Button;
 import android.widget.CheckBox;
 import android.widget.EditText;
@@ -43,6 +53,7 @@ import androidx.camera.core.Preview;
 import androidx.camera.lifecycle.ProcessCameraProvider;
 import androidx.camera.view.PreviewView;
 import androidx.core.content.ContextCompat;
+import androidx.exifinterface.media.ExifInterface;
 
 import com.google.common.util.concurrent.ListenableFuture;
 
@@ -74,6 +85,15 @@ public class MainActivity extends ComponentActivity {
 
     private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor();
     private final ExecutorService apiExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService imageExecutor = Executors.newFixedThreadPool(2);
+    private final LruCache<String, Bitmap> imageCache = new LruCache<String, Bitmap>(
+            (int) Math.max(4 * 1024, Runtime.getRuntime().maxMemory() / 1024 / 8)
+    ) {
+        @Override
+        protected int sizeOf(String key, Bitmap bitmap) {
+            return bitmap.getByteCount() / 1024;
+        }
+    };
 
     private FrameLayout root;
     private ReceiptStore receiptStore;
@@ -146,6 +166,7 @@ public class MainActivity extends ComponentActivity {
         super.onDestroy();
         cameraExecutor.shutdown();
         apiExecutor.shutdown();
+        imageExecutor.shutdown();
     }
 
     @Override
@@ -173,6 +194,7 @@ public class MainActivity extends ComponentActivity {
         FrameLayout cameraRoot = new FrameLayout(this);
         cameraRoot.setBackgroundColor(Color.BLACK);
         root.addView(cameraRoot, matchParent());
+        animateScreen(cameraRoot);
         attachSwipe(cameraRoot, this::showCategories, this::showSettings);
 
         PreviewView previewView = new PreviewView(this);
@@ -205,7 +227,8 @@ public class MainActivity extends ComponentActivity {
         shutterBackground.setShape(GradientDrawable.OVAL);
         shutterBackground.setColor(palette.shutter);
         shutterBackground.setStroke(dp(5), palette.shutterRing);
-        shutter.setBackground(shutterBackground);
+        shutter.setBackground(withRipple(shutterBackground));
+        installPressFeedback(shutter);
         shutterFrame.addView(shutter, matchParent());
 
         ProgressBar progress = new ProgressBar(this);
@@ -294,10 +317,10 @@ public class MainActivity extends ComponentActivity {
         FrameLayout reviewRoot = new FrameLayout(this);
         reviewRoot.setBackgroundColor(Color.BLACK);
         root.addView(reviewRoot, matchParent());
+        animateScreen(reviewRoot);
 
         ImageView imageView = new ImageView(this);
-        imageView.setImageURI(Uri.fromFile(photoFile));
-        imageView.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        loadPhoto(imageView, photoFile, 420, 760, ImageView.ScaleType.FIT_CENTER);
         reviewRoot.addView(imageView, matchParent());
 
         LinearLayout actions = new LinearLayout(this);
@@ -559,10 +582,12 @@ public class MainActivity extends ComponentActivity {
         categoryList.setOrientation(LinearLayout.VERTICAL);
         content.addView(categoryList, matchWrap());
 
+        int categoryIndex = 0;
         for (Category category : receiptStore.getCategories()) {
             LinearLayout card = categoryCard(category);
             card.setOnClickListener(view -> showCategory(category.id));
             categoryList.addView(card, matchWrap());
+            animateListItem(card, categoryIndex++);
         }
         renderStorageSearchResults(storageSearchQuery, searchResults, categoryList);
         Runnable runSearch = () -> {
@@ -610,6 +635,7 @@ public class MainActivity extends ComponentActivity {
             content.addView(subtitle("No receipts in this category yet."));
         }
 
+        int receiptIndex = 0;
         for (Receipt receipt : receipts) {
             if (!activeFilter.matches(receipt.date)) {
                 continue;
@@ -617,6 +643,7 @@ public class MainActivity extends ComponentActivity {
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
             content.addView(entry, matchWrap());
+            animateListItem(entry, receiptIndex++);
         }
 
     }
@@ -667,6 +694,7 @@ public class MainActivity extends ComponentActivity {
         }
 
         content.addView(label("Receipts"));
+        int archivedReceiptIndex = 0;
         for (Receipt receipt : archivedReceipts) {
             if (!activeFilter.matches(receipt.date)) {
                 continue;
@@ -674,6 +702,7 @@ public class MainActivity extends ComponentActivity {
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id, true));
             content.addView(entry, matchWrap());
+            animateListItem(entry, archivedReceiptIndex++);
         }
     }
 
@@ -701,10 +730,10 @@ public class MainActivity extends ComponentActivity {
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
 
         ImageView photo = new ImageView(this);
-        photo.setImageURI(Uri.fromFile(new File(receipt.photoPath)));
-        photo.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        loadPhoto(photo, new File(receipt.photoPath), 360, 210, ImageView.ScaleType.CENTER_CROP);
         content.addView(photo, new LinearLayout.LayoutParams(match(), dp(210)));
         photo.setOnClickListener(view -> showFullscreenPhoto(receipt.id));
+        installPressFeedback(photo);
 
         String status = receipt.archived ? " · Archived" : "";
         content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name) + status));
@@ -1117,6 +1146,7 @@ public class MainActivity extends ComponentActivity {
             LinearLayout entry = compactReceiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
             summary.addView(entry, matchWrap());
+            animateListItem(entry, index);
         }
         if (usingAllTimeFallback) {
             summary.addView(subtitle("No receipts this month yet, so this shows your biggest saved purchases."));
@@ -1137,13 +1167,15 @@ public class MainActivity extends ComponentActivity {
             LinearLayout entry = compactReceiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
             summary.addView(entry, matchWrap());
+            animateListItem(entry, index);
         }
     }
 
     private LinearLayout compactReceiptEntry(Receipt receipt) {
         LinearLayout entry = row();
         entry.setPadding(dp(10), dp(8), dp(10), dp(8));
-        entry.setBackground(roundedStroke(palette.input, dp(14), palette.stroke, 1));
+        entry.setBackground(withRipple(roundedStroke(palette.input, dp(14), palette.stroke, 1)));
+        installPressFeedback(entry);
         LinearLayout.LayoutParams params = matchWrap();
         params.topMargin = dp(8);
         entry.setLayoutParams(params);
@@ -1205,7 +1237,8 @@ public class MainActivity extends ComponentActivity {
 
     private LinearLayout receiptEntry(Receipt receipt) {
         LinearLayout entry = row();
-        entry.setBackground(roundedStroke(palette.panel, dp(16), palette.stroke, 1));
+        entry.setBackground(withRipple(roundedStroke(palette.panel, dp(16), palette.stroke, 1)));
+        installPressFeedback(entry);
         entry.setPadding(dp(10), dp(10), dp(12), dp(10));
         entry.setGravity(Gravity.CENTER_VERTICAL);
         LinearLayout.LayoutParams params = matchWrap();
@@ -1213,8 +1246,7 @@ public class MainActivity extends ComponentActivity {
         entry.setLayoutParams(params);
 
         ImageView thumb = new ImageView(this);
-        thumb.setImageURI(Uri.fromFile(new File(receipt.photoPath)));
-        thumb.setScaleType(ImageView.ScaleType.CENTER_CROP);
+        loadPhoto(thumb, new File(receipt.photoPath), 72, 72, ImageView.ScaleType.CENTER_CROP);
         entry.addView(thumb, new LinearLayout.LayoutParams(dp(72), dp(72)));
 
         TextView date = title(receipt.date);
@@ -1247,10 +1279,12 @@ public class MainActivity extends ComponentActivity {
             return;
         }
 
+        int resultIndex = 0;
         for (Receipt receipt : results) {
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
             resultsContainer.addView(entry, matchWrap());
+            animateListItem(entry, resultIndex++);
         }
     }
 
@@ -1441,11 +1475,12 @@ public class MainActivity extends ComponentActivity {
         FrameLayout photoRoot = new FrameLayout(this);
         photoRoot.setBackgroundColor(Color.BLACK);
         root.addView(photoRoot, matchParent());
+        animateScreen(photoRoot);
 
         ImageView photo = new ImageView(this);
-        photo.setImageURI(Uri.fromFile(new File(receipt.photoPath)));
-        photo.setScaleType(ImageView.ScaleType.FIT_CENTER);
+        loadPhoto(photo, new File(receipt.photoPath), 420, 760, ImageView.ScaleType.MATRIX);
         photoRoot.addView(photo, matchParent());
+        installZoomablePhoto(photo);
 
         ImageButton close = floatingIconButton(R.drawable.ic_close);
         FrameLayout.LayoutParams closeParams = cornerButtonParams(Gravity.TOP | Gravity.END);
@@ -1454,6 +1489,275 @@ public class MainActivity extends ComponentActivity {
             fullscreenReceiptId = null;
             showReceiptDetail(receiptId);
         });
+    }
+
+    private void loadPhoto(ImageView imageView, File photoFile, int fallbackWidthDp, int fallbackHeightDp, ImageView.ScaleType scaleType) {
+        imageView.setScaleType(scaleType);
+        imageView.setBackgroundColor(palette.dark ? 0xFF0B0F0C : palette.iconWell);
+        imageView.clearColorFilter();
+        imageView.setImageDrawable(null);
+        if (photoFile == null || !photoFile.exists() || !photoFile.isFile()) {
+            return;
+        }
+
+        String photoId = photoFile.getAbsolutePath() + ":" + photoFile.lastModified();
+        imageView.setTag(photoId);
+        imageView.post(() -> {
+            int targetWidth = imageView.getWidth() > 0 ? imageView.getWidth() : dp(fallbackWidthDp);
+            int targetHeight = imageView.getHeight() > 0 ? imageView.getHeight() : dp(fallbackHeightDp);
+            String cacheKey = photoId + ":" + Math.max(1, targetWidth) + "x" + Math.max(1, targetHeight);
+            imageView.setTag(cacheKey);
+
+            Bitmap cached = imageCache.get(cacheKey);
+            if (cached != null) {
+                setPhotoBitmap(imageView, cached, false);
+                return;
+            }
+
+            imageExecutor.execute(() -> {
+                Bitmap decoded = decodeSampledPhoto(photoFile, targetWidth, targetHeight);
+                if (decoded != null) {
+                    imageCache.put(cacheKey, decoded);
+                }
+                runOnUiThread(() -> {
+                    if (!cacheKey.equals(imageView.getTag()) || decoded == null) {
+                        return;
+                    }
+                    setPhotoBitmap(imageView, decoded, true);
+                });
+            });
+        });
+    }
+
+    private void setPhotoBitmap(ImageView imageView, Bitmap bitmap, boolean fadeIn) {
+        imageView.clearColorFilter();
+        if (fadeIn) {
+            imageView.setAlpha(0f);
+        }
+        imageView.setImageBitmap(bitmap);
+        if (imageView.getScaleType() == ImageView.ScaleType.MATRIX) {
+            imageView.post(() -> fitPhotoToView(imageView));
+        }
+        imageView.animate().cancel();
+        imageView.animate()
+                .alpha(1f)
+                .setDuration(fadeIn ? 150 : 0)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+    }
+
+    private void installZoomablePhoto(ImageView photo) {
+        final float minScale = 1f;
+        final float maxScale = 4f;
+        final float[] userScale = {minScale};
+        final float[] lastX = {0f};
+        final float[] lastY = {0f};
+        final boolean[] moved = {false};
+
+        ScaleGestureDetector scaleDetector = new ScaleGestureDetector(this, new ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            @Override
+            public boolean onScale(ScaleGestureDetector detector) {
+                float targetScale = Math.max(minScale, Math.min(maxScale, userScale[0] * detector.getScaleFactor()));
+                float factor = targetScale / userScale[0];
+                if (Math.abs(factor - 1f) < 0.001f) {
+                    return true;
+                }
+
+                Matrix matrix = new Matrix(photo.getImageMatrix());
+                matrix.postScale(factor, factor, detector.getFocusX(), detector.getFocusY());
+                userScale[0] = targetScale;
+                applyBoundedPhotoMatrix(photo, matrix);
+                return true;
+            }
+        });
+
+        GestureDetector gestureDetector = new GestureDetector(this, new GestureDetector.SimpleOnGestureListener() {
+            @Override
+            public boolean onDoubleTap(MotionEvent event) {
+                if (userScale[0] > 1.05f) {
+                    userScale[0] = minScale;
+                    fitPhotoToView(photo);
+                    return true;
+                }
+
+                float targetScale = 2.25f;
+                Matrix matrix = new Matrix(photo.getImageMatrix());
+                matrix.postScale(targetScale, targetScale, event.getX(), event.getY());
+                userScale[0] = targetScale;
+                applyBoundedPhotoMatrix(photo, matrix);
+                return true;
+            }
+        });
+
+        photo.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (userScale[0] == minScale && photo.getDrawable() != null) {
+                fitPhotoToView(photo);
+            }
+        });
+
+        photo.setOnTouchListener((view, event) -> {
+            scaleDetector.onTouchEvent(event);
+            gestureDetector.onTouchEvent(event);
+
+            if (event.getPointerCount() > 1) {
+                moved[0] = true;
+                return true;
+            }
+
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                lastX[0] = event.getX();
+                lastY[0] = event.getY();
+                moved[0] = false;
+                return true;
+            }
+
+            if (event.getActionMasked() == MotionEvent.ACTION_MOVE && userScale[0] > minScale) {
+                float dx = event.getX() - lastX[0];
+                float dy = event.getY() - lastY[0];
+                if (Math.abs(dx) > 1f || Math.abs(dy) > 1f) {
+                    Matrix matrix = new Matrix(photo.getImageMatrix());
+                    matrix.postTranslate(dx, dy);
+                    applyBoundedPhotoMatrix(photo, matrix);
+                    moved[0] = true;
+                }
+                lastX[0] = event.getX();
+                lastY[0] = event.getY();
+                return true;
+            }
+
+            if (event.getActionMasked() == MotionEvent.ACTION_UP || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                if (userScale[0] <= minScale && moved[0]) {
+                    fitPhotoToView(photo);
+                }
+                return true;
+            }
+
+            return userScale[0] > minScale || scaleDetector.isInProgress();
+        });
+    }
+
+    private void fitPhotoToView(ImageView imageView) {
+        Drawable drawable = imageView.getDrawable();
+        if (drawable == null || imageView.getWidth() <= 0 || imageView.getHeight() <= 0) {
+            return;
+        }
+
+        int drawableWidth = drawable.getIntrinsicWidth();
+        int drawableHeight = drawable.getIntrinsicHeight();
+        if (drawableWidth <= 0 || drawableHeight <= 0) {
+            return;
+        }
+
+        RectF drawableBounds = new RectF(0, 0, drawableWidth, drawableHeight);
+        RectF viewBounds = new RectF(0, 0, imageView.getWidth(), imageView.getHeight());
+        Matrix matrix = new Matrix();
+        matrix.setRectToRect(drawableBounds, viewBounds, Matrix.ScaleToFit.CENTER);
+        imageView.setImageMatrix(matrix);
+    }
+
+    private void applyBoundedPhotoMatrix(ImageView imageView, Matrix matrix) {
+        RectF bounds = photoBounds(imageView, matrix);
+        if (bounds == null) {
+            return;
+        }
+
+        float dx = 0f;
+        float dy = 0f;
+        float viewWidth = imageView.getWidth();
+        float viewHeight = imageView.getHeight();
+
+        if (bounds.width() <= viewWidth) {
+            dx = (viewWidth - bounds.width()) / 2f - bounds.left;
+        } else if (bounds.left > 0) {
+            dx = -bounds.left;
+        } else if (bounds.right < viewWidth) {
+            dx = viewWidth - bounds.right;
+        }
+
+        if (bounds.height() <= viewHeight) {
+            dy = (viewHeight - bounds.height()) / 2f - bounds.top;
+        } else if (bounds.top > 0) {
+            dy = -bounds.top;
+        } else if (bounds.bottom < viewHeight) {
+            dy = viewHeight - bounds.bottom;
+        }
+
+        matrix.postTranslate(dx, dy);
+        imageView.setImageMatrix(matrix);
+    }
+
+    private RectF photoBounds(ImageView imageView, Matrix matrix) {
+        Drawable drawable = imageView.getDrawable();
+        if (drawable == null) {
+            return null;
+        }
+
+        int drawableWidth = drawable.getIntrinsicWidth();
+        int drawableHeight = drawable.getIntrinsicHeight();
+        if (drawableWidth <= 0 || drawableHeight <= 0) {
+            return null;
+        }
+
+        RectF bounds = new RectF(0, 0, drawableWidth, drawableHeight);
+        matrix.mapRect(bounds);
+        return bounds;
+    }
+
+    private Bitmap decodeSampledPhoto(File photoFile, int targetWidth, int targetHeight) {
+        int safeWidth = Math.max(dp(64), targetWidth);
+        int safeHeight = Math.max(dp(64), targetHeight);
+
+        BitmapFactory.Options bounds = new BitmapFactory.Options();
+        bounds.inJustDecodeBounds = true;
+        BitmapFactory.decodeFile(photoFile.getAbsolutePath(), bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+            return null;
+        }
+
+        BitmapFactory.Options options = new BitmapFactory.Options();
+        options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, safeWidth, safeHeight);
+        options.inPreferredConfig = Bitmap.Config.RGB_565;
+        options.inDither = true;
+        Bitmap bitmap = BitmapFactory.decodeFile(photoFile.getAbsolutePath(), options);
+        return bitmap == null ? null : rotatePhotoIfNeeded(photoFile, bitmap);
+    }
+
+    private int sampleSize(int sourceWidth, int sourceHeight, int targetWidth, int targetHeight) {
+        int sampleSize = 1;
+        int halfWidth = sourceWidth / 2;
+        int halfHeight = sourceHeight / 2;
+        while ((halfWidth / sampleSize) >= targetWidth && (halfHeight / sampleSize) >= targetHeight) {
+            sampleSize *= 2;
+        }
+        return Math.max(1, sampleSize);
+    }
+
+    private Bitmap rotatePhotoIfNeeded(File photoFile, Bitmap bitmap) {
+        try {
+            ExifInterface exif = new ExifInterface(photoFile.getAbsolutePath());
+            int orientation = exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            int degrees = 0;
+            if (orientation == ExifInterface.ORIENTATION_ROTATE_90) {
+                degrees = 90;
+            } else if (orientation == ExifInterface.ORIENTATION_ROTATE_180) {
+                degrees = 180;
+            } else if (orientation == ExifInterface.ORIENTATION_ROTATE_270) {
+                degrees = 270;
+            }
+            if (degrees == 0) {
+                return bitmap;
+            }
+
+            Matrix matrix = new Matrix();
+            matrix.postRotate(degrees);
+            Bitmap rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), matrix, true);
+            if (rotated != bitmap) {
+                bitmap.recycle();
+            }
+            return rotated;
+        } catch (Exception ignored) {
+            return bitmap;
+        }
     }
 
     private void showLoading(String message) {
@@ -1469,6 +1773,7 @@ public class MainActivity extends ComponentActivity {
         loading.addView(progress);
         loading.addView(text);
         root.addView(loading, matchParent());
+        animateScreen(loading);
     }
 
     private ScrollView page(String titleText, Runnable backAction) {
@@ -1482,6 +1787,7 @@ public class MainActivity extends ComponentActivity {
         scrollView.addView(content, matchWrap());
         content.addView(topBar(titleText, backAction), matchWrap());
         root.addView(scrollView, matchParent());
+        animateScreen(scrollView);
         return scrollView;
     }
 
@@ -1527,7 +1833,8 @@ public class MainActivity extends ComponentActivity {
 
     private LinearLayout categoryCard(Category category) {
         LinearLayout card = row();
-        card.setBackground(roundedStroke(palette.panel, dp(18), palette.stroke, 1));
+        card.setBackground(withRipple(roundedStroke(palette.panel, dp(18), palette.stroke, 1)));
+        installPressFeedback(card);
         card.setPadding(dp(14), dp(14), dp(14), dp(14));
         LinearLayout.LayoutParams params = matchWrap();
         params.topMargin = dp(14);
@@ -1643,7 +1950,8 @@ public class MainActivity extends ComponentActivity {
         button.setTextSize(16);
         button.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
         button.setAllCaps(false);
-        button.setBackground(rounded(palette.accent, dp(16)));
+        button.setBackground(withRipple(rounded(palette.accent, dp(16))));
+        installPressFeedback(button);
         button.setMinHeight(dp(52));
         LinearLayout.LayoutParams params = matchWrap();
         params.topMargin = dp(16);
@@ -1657,7 +1965,8 @@ public class MainActivity extends ComponentActivity {
         button.setTextColor(palette.text);
         button.setTextSize(15);
         button.setAllCaps(false);
-        button.setBackground(roundedStroke(palette.panel, dp(16), palette.stroke, 1));
+        button.setBackground(withRipple(roundedStroke(palette.panel, dp(16), palette.stroke, 1)));
+        installPressFeedback(button);
         button.setMinHeight(dp(52));
         LinearLayout.LayoutParams params = matchWrap();
         params.topMargin = dp(10);
@@ -1683,7 +1992,8 @@ public class MainActivity extends ComponentActivity {
         button.setColorFilter(Color.WHITE);
         button.setPadding(dp(15), dp(15), dp(15), dp(15));
         button.setScaleType(ImageView.ScaleType.CENTER);
-        button.setBackground(rounded(0x99000000, dp(18)));
+        button.setBackground(withRipple(rounded(0x99000000, dp(18))));
+        installPressFeedback(button);
         return button;
     }
 
@@ -1693,7 +2003,8 @@ public class MainActivity extends ComponentActivity {
         button.setColorFilter(palette.accent);
         button.setPadding(dp(14), dp(14), dp(14), dp(14));
         button.setScaleType(ImageView.ScaleType.CENTER);
-        button.setBackground(roundedStroke(palette.panel, dp(16), palette.stroke, 1));
+        button.setBackground(withRipple(roundedStroke(palette.panel, dp(16), palette.stroke, 1)));
+        installPressFeedback(button);
         return button;
     }
 
@@ -1703,7 +2014,8 @@ public class MainActivity extends ComponentActivity {
         button.setColorFilter(palette.text);
         button.setPadding(dp(14), dp(14), dp(14), dp(14));
         button.setScaleType(ImageView.ScaleType.CENTER);
-        button.setBackground(rounded(palette.chip, dp(16)));
+        button.setBackground(withRipple(rounded(palette.chip, dp(16))));
+        installPressFeedback(button);
         return button;
     }
 
@@ -1788,6 +2100,61 @@ public class MainActivity extends ComponentActivity {
             flags |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
         }
         getWindow().getDecorView().setSystemUiVisibility(flags);
+    }
+
+    private Drawable withRipple(Drawable content) {
+        int rippleColor = Color.argb(
+                palette.dark ? 80 : 54,
+                Color.red(palette.accent),
+                Color.green(palette.accent),
+                Color.blue(palette.accent)
+        );
+        return new RippleDrawable(ColorStateList.valueOf(rippleColor), content, null);
+    }
+
+    private void installPressFeedback(View view) {
+        view.setClickable(true);
+        view.setOnTouchListener((pressedView, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_DOWN && pressedView.isEnabled()) {
+                pressedView.animate().cancel();
+                pressedView.animate()
+                        .scaleX(0.97f)
+                        .scaleY(0.97f)
+                        .setDuration(55)
+                        .start();
+            } else if (event.getActionMasked() == MotionEvent.ACTION_UP
+                    || event.getActionMasked() == MotionEvent.ACTION_CANCEL) {
+                pressedView.animate().cancel();
+                pressedView.animate()
+                        .scaleX(1f)
+                        .scaleY(1f)
+                        .setDuration(115)
+                        .setInterpolator(new DecelerateInterpolator())
+                        .start();
+            }
+            return false;
+        });
+    }
+
+    private void animateScreen(View view) {
+        view.setAlpha(0f);
+        view.animate()
+                .alpha(1f)
+                .setDuration(120)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
+    }
+
+    private void animateListItem(View view, int index) {
+        view.setAlpha(0f);
+        view.setTranslationY(dp(8));
+        view.animate()
+                .alpha(1f)
+                .translationY(0f)
+                .setStartDelay(Math.min(index * 18L, 126L))
+                .setDuration(150)
+                .setInterpolator(new DecelerateInterpolator())
+                .start();
     }
 
     private GradientDrawable rounded(int color, int radius) {
