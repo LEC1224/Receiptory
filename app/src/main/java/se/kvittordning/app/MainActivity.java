@@ -101,7 +101,7 @@ public class MainActivity extends ComponentActivity {
     private FrameLayout root;
     private ReceiptStore receiptStore;
     private SettingsStore settingsStore;
-    private OpenAiReceiptExtractor receiptExtractor;
+    private ReceiptBackendClient receiptExtractor;
     private ImageCapture imageCapture;
     private File pendingCapture;
     private DateFilter activeFilter = DateFilter.all();
@@ -123,7 +123,7 @@ public class MainActivity extends ComponentActivity {
         receiptStore = new ReceiptStore(this);
         receiptStore.ensureDefaultCategories();
         settingsStore = new SettingsStore(this);
-        receiptExtractor = new OpenAiReceiptExtractor();
+        receiptExtractor = new ReceiptBackendClient();
         palette = Palette.from(this, settingsStore.getTheme());
         registerBackupRestoreLaunchers();
         applySystemBars();
@@ -339,9 +339,9 @@ public class MainActivity extends ComponentActivity {
     }
 
     private void submitReceipt(File photoFile) {
-        String apiKey = settingsStore.getApiKey();
-        if (apiKey.isEmpty()) {
-            toast("Add your OpenAI API key in settings first.");
+        String backendUrl = settingsStore.getBackendUrl();
+        if (backendUrl.isEmpty()) {
+            toast("Add your AI backend URL in settings first.");
             showSettings();
             return;
         }
@@ -353,8 +353,7 @@ public class MainActivity extends ComponentActivity {
                 ReceiptExtraction extraction = receiptExtractor.extract(
                         storedPhoto,
                         receiptStore.getCategories(),
-                        apiKey,
-                        settingsStore.getModel(),
+                        backendUrl,
                         settingsStore.allowAiNewCategories()
                 );
                 String categoryId = resolveCategoryId(extraction);
@@ -415,16 +414,12 @@ public class MainActivity extends ComponentActivity {
         content.addView(appearanceCard, matchWrap());
 
         LinearLayout aiCard = card();
-        aiCard.addView(label("OpenAI"));
+        aiCard.addView(label("AI backend"));
 
-        EditText apiKey = input("OpenAI API key");
-        apiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        apiKey.setText(settingsStore.getApiKey());
-        aiCard.addView(apiKey, matchWrap());
-
-        EditText model = input("Model");
-        model.setText(settingsStore.getModel());
-        aiCard.addView(model, matchWrap());
+        EditText backendUrl = input("Backend URL");
+        backendUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        backendUrl.setText(settingsStore.getBackendUrl());
+        aiCard.addView(backendUrl, matchWrap());
 
         CheckBox allowAiNewCategories = new CheckBox(this);
         allowAiNewCategories.setText("Allow AI to suggest new category");
@@ -457,8 +452,7 @@ public class MainActivity extends ComponentActivity {
         Button save = primaryButton("Save settings");
         content.addView(save, matchWrap());
         save.setOnClickListener(view -> {
-            settingsStore.setApiKey(apiKey.getText().toString());
-            settingsStore.setModel(model.getText().toString());
+            settingsStore.setBackendUrl(backendUrl.getText().toString());
             settingsStore.setAllowAiNewCategories(allowAiNewCategories.isChecked());
             settingsStore.setCurrencyCode(currency.getText().toString());
             int checkedId = themeGroup.getCheckedRadioButtonId();
@@ -583,7 +577,7 @@ public class MainActivity extends ComponentActivity {
         for (Category category : receiptStore.getCategories()) {
             LinearLayout card = categoryCard(category);
             card.setOnClickListener(view -> showCategory(category.id));
-            categoryList.addView(card, matchWrap());
+            categoryList.addView(card);
             animateListItem(card, categoryIndex++);
         }
         renderStorageSearchResults(storageSearchQuery, searchResults, categoryList);
@@ -638,7 +632,7 @@ public class MainActivity extends ComponentActivity {
             }
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
-            content.addView(entry, matchWrap());
+            content.addView(entry);
             animateListItem(entry, receiptIndex++);
         }
 
@@ -696,7 +690,7 @@ public class MainActivity extends ComponentActivity {
             }
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id, true));
-            content.addView(entry, matchWrap());
+            content.addView(entry);
             animateListItem(entry, archivedReceiptIndex++);
         }
     }
@@ -1253,7 +1247,7 @@ public class MainActivity extends ComponentActivity {
             Receipt receipt = ranked.get(index);
             LinearLayout entry = compactReceiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
-            summary.addView(entry, matchWrap());
+            summary.addView(entry);
             animateListItem(entry, index);
         }
         if (usingAllTimeFallback) {
@@ -1274,7 +1268,7 @@ public class MainActivity extends ComponentActivity {
             Receipt receipt = recent.get(index);
             LinearLayout entry = compactReceiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
-            summary.addView(entry, matchWrap());
+            summary.addView(entry);
             animateListItem(entry, index);
         }
     }
@@ -1391,7 +1385,7 @@ public class MainActivity extends ComponentActivity {
         for (Receipt receipt : results) {
             LinearLayout entry = receiptEntry(receipt);
             entry.setOnClickListener(view -> showReceiptDetail(receipt.id));
-            resultsContainer.addView(entry, matchWrap());
+            resultsContainer.addView(entry);
             animateListItem(entry, resultIndex++);
         }
     }
