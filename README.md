@@ -7,9 +7,11 @@ En native Android-app for att fotografera kvitton, extrahera inkopsdata via en l
 - Kamera som startvy med slutarknapp, retake och submit.
 - Settings-vy med ljust, morkt eller systemstyrt lage samt URL till AI-backend.
 - Lokal lagring av originalbild, extraherad text, varurader och totalsumma.
+- Kvitton kan sparas manuellt for att AI-skannas senare.
 - Kategorivy med total spendering per kategori och filter for manad, ar eller eget datumspann.
 - Kvitton visas kronologiskt med thumbnail, datum och total.
 - Kvitton kan flyttas mellan kategorier och anvandaren kan skapa egna kategorier.
+- Storage-vyn kan skanna alla manuellt sparade, oskannade kvitton i efterhand.
 - AI-backenden skickar med alla befintliga kategorier och later modellen antingen valja en befintlig kategori eller foresla en ny.
 
 ## AI-backend pa Windows

@@ -85,6 +85,17 @@ public class ReceiptStore {
         return archived;
     }
 
+    public List<Receipt> getUnscannedReceipts() {
+        List<Receipt> unscanned = new ArrayList<>();
+        for (Receipt receipt : receipts) {
+            if (!receipt.archived && receipt.isAiUnscanned() && hasReadablePhoto(receipt)) {
+                unscanned.add(receipt);
+            }
+        }
+        unscanned.sort((left, right) -> Long.compare(left.createdAt, right.createdAt));
+        return unscanned;
+    }
+
     public List<Receipt> getReceiptsForCategory(String categoryId) {
         return getReceiptsForCategory(categoryId, false);
     }
@@ -539,7 +550,10 @@ public class ReceiptStore {
                 new ArrayList<>(receipt.items),
                 receipt.rawText,
                 receipt.createdAt,
-                receipt.archived
+                receipt.archived,
+                receipt.aiScanStatus,
+                receipt.aiScannedAt,
+                receipt.aiScanError
         );
     }
 
@@ -551,6 +565,14 @@ public class ReceiptStore {
         if (photo.exists() && photo.isFile()) {
             photo.delete();
         }
+    }
+
+    private boolean hasReadablePhoto(Receipt receipt) {
+        if (receipt == null || receipt.photoPath == null || receipt.photoPath.trim().isEmpty()) {
+            return false;
+        }
+        File photo = new File(receipt.photoPath);
+        return photo.exists() && photo.isFile();
     }
 
     private File uniquePhotoFile(String fileName) {

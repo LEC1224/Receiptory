@@ -336,6 +336,10 @@ public class MainActivity extends ComponentActivity {
         Button submit = primaryButton("Submit");
         actions.addView(submit, weightedButton());
         submit.setOnClickListener(view -> submitReceipt(photoFile));
+
+        Button manual = secondaryButton("Save manually");
+        actions.addView(manual, weightedButton());
+        manual.setOnClickListener(view -> saveManualReceipt(photoFile));
     }
 
     private void submitReceipt(File photoFile) {
@@ -369,7 +373,11 @@ public class MainActivity extends ComponentActivity {
                         storedPhoto.getAbsolutePath(),
                         extraction.items,
                         extraction.rawText,
-                        System.currentTimeMillis()
+                        System.currentTimeMillis(),
+                        false,
+                        Receipt.AI_SCAN_EXTRACTED,
+                        System.currentTimeMillis(),
+                        ""
                 );
                 receiptStore.addReceipt(receipt);
                 runOnUiThread(() -> showReceiptDetail(receipt.id));
@@ -386,6 +394,37 @@ public class MainActivity extends ComponentActivity {
         });
     }
 
+    private void saveManualReceipt(File photoFile) {
+        showLoading("Saving receipt...");
+        apiExecutor.execute(() -> {
+            try {
+                File storedPhoto = receiptStore.savePhoto(Uri.fromFile(photoFile));
+                Receipt receipt = new Receipt(
+                        UUID.randomUUID().toString(),
+                        defaultCategoryId(),
+                        "",
+                        "",
+                        0,
+                        storedPhoto.getAbsolutePath(),
+                        new ArrayList<>(),
+                        "",
+                        System.currentTimeMillis(),
+                        false,
+                        Receipt.AI_SCAN_MANUAL,
+                        0,
+                        ""
+                );
+                receiptStore.addReceipt(receipt);
+                runOnUiThread(() -> showEditReceipt(receipt.id));
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    toast(exception.getMessage());
+                    showCaptureReview(photoFile);
+                });
+            }
+        });
+    }
+
     private String resolveCategoryId(ReceiptExtraction extraction) {
         if ("use_existing".equals(extraction.categoryAction)
                 && receiptStore.getCategory(extraction.existingCategoryId) != null) {
@@ -395,6 +434,15 @@ public class MainActivity extends ComponentActivity {
                 ? "Other"
                 : extraction.newCategoryName;
         return receiptStore.addAiSuggestedCategory(name).id;
+    }
+
+    private String defaultCategoryId() {
+        for (Category category : receiptStore.getCategories()) {
+            if ("Other".equalsIgnoreCase(category.name)) {
+                return category.id;
+            }
+        }
+        return receiptStore.addCategory("Other").id;
     }
 
     private void showSettings() {
@@ -552,6 +600,13 @@ public class MainActivity extends ComponentActivity {
         Button archive = iconButtonText(R.drawable.ic_folder, "Archived receipts");
         content.addView(archive, compactButtonParams());
         archive.setOnClickListener(view -> showArchivedReceipts());
+
+        List<Receipt> unscannedReceipts = receiptStore.getUnscannedReceipts();
+        if (!unscannedReceipts.isEmpty()) {
+            Button scanAll = iconButtonText(R.drawable.ic_spark, "Scan all unscanned (" + unscannedReceipts.size() + ")");
+            content.addView(scanAll, compactButtonParams());
+            scanAll.setOnClickListener(view -> confirmScanAllUnscanned());
+        }
 
         LinearLayout searchRow = row();
         EditText search = input("Search receipts");
@@ -714,7 +769,7 @@ public class MainActivity extends ComponentActivity {
         Runnable backAction = fromArchiveView || receipt.archived
                 ? this::showArchivedReceipts
                 : () -> showCategory(receipt.categoryId);
-        ScrollView scrollView = page(receipt.merchant, backAction);
+        ScrollView scrollView = page(receipt.merchant == null || receipt.merchant.trim().isEmpty() ? "Receipt" : receipt.merchant, backAction);
         LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
 
         ImageView photo = new ImageView(this);
@@ -725,11 +780,18 @@ public class MainActivity extends ComponentActivity {
 
         String status = receipt.archived ? " · Archived" : "";
         content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name) + status));
+        content.addView(chip(aiScanLabel(receipt)));
         content.addView(title(money(receipt.total)));
 
         Button edit = iconButtonText(R.drawable.ic_edit, "Edit receipt");
         content.addView(edit, compactButtonParams());
         edit.setOnClickListener(view -> showEditReceipt(receipt.id));
+
+        if (!receipt.isAiExtracted()) {
+            Button scan = iconButtonText(R.drawable.ic_spark, receipt.isAiUnscanned() ? "Scan missing details" : "Retry AI scan");
+            content.addView(scan, compactButtonParams());
+            scan.setOnClickListener(view -> scanReceipt(receipt.id, fromArchiveView || receipt.archived));
+        }
 
         Button move = iconButtonText(R.drawable.ic_folder, "Move category");
         content.addView(move, compactButtonParams());
@@ -944,12 +1006,177 @@ public class MainActivity extends ComponentActivity {
                     updatedItems,
                     rawText.getText().toString(),
                     receipt.createdAt,
-                    receipt.archived
+                    receipt.archived,
+                    receipt.aiScanStatus,
+                    receipt.aiScannedAt,
+                    receipt.aiScanError
             );
             receiptStore.updateReceipt(updatedReceipt);
             toast("Receipt updated.");
             showReceiptDetail(receiptId);
         });
+    }
+
+    private void confirmScanAllUnscanned() {
+        List<Receipt> unscannedReceipts = receiptStore.getUnscannedReceipts();
+        if (unscannedReceipts.isEmpty()) {
+            toast("No unscanned receipts.");
+            return;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("Scan all unscanned receipts?")
+                .setMessage("This will process " + unscannedReceipts.size() + " stored receipt photos and fill missing details without overwriting existing manual fields.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Scan", (dialog, which) -> scanAllUnscanned())
+                .show();
+    }
+
+    private void scanAllUnscanned() {
+        String backendUrl = settingsStore.getBackendUrl();
+        if (backendUrl.isEmpty()) {
+            toast("Add your AI backend URL in settings first.");
+            showSettings();
+            return;
+        }
+
+        List<Receipt> unscannedReceipts = receiptStore.getUnscannedReceipts();
+        showLoading("Scanning " + unscannedReceipts.size() + " receipts...");
+        apiExecutor.execute(() -> {
+            int scanned = 0;
+            int failed = 0;
+            for (Receipt receipt : unscannedReceipts) {
+                try {
+                    ReceiptExtraction extraction = receiptExtractor.extract(
+                            new File(receipt.photoPath),
+                            receiptStore.getCategories(),
+                            backendUrl,
+                            settingsStore.allowAiNewCategories()
+                    );
+                    receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
+                    scanned++;
+                } catch (Exception exception) {
+                    markReceiptScanFailed(receipt, exception);
+                    failed++;
+                }
+            }
+            int scannedCount = scanned;
+            int failedCount = failed;
+            runOnUiThread(() -> {
+                toast("AI scan complete: " + scannedCount + " updated"
+                        + (failedCount > 0 ? ", " + failedCount + " failed" : "") + ".");
+                showCategories();
+            });
+        });
+    }
+
+    private void scanReceipt(String receiptId, boolean fromArchiveView) {
+        String backendUrl = settingsStore.getBackendUrl();
+        if (backendUrl.isEmpty()) {
+            toast("Add your AI backend URL in settings first.");
+            showSettings();
+            return;
+        }
+
+        Receipt receipt = receiptStore.getReceipt(receiptId);
+        if (receipt == null) {
+            showCategories();
+            return;
+        }
+
+        showLoading("Scanning receipt...");
+        apiExecutor.execute(() -> {
+            try {
+                ReceiptExtraction extraction = receiptExtractor.extract(
+                        new File(receipt.photoPath),
+                        receiptStore.getCategories(),
+                        backendUrl,
+                        settingsStore.allowAiNewCategories()
+                );
+                receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
+                runOnUiThread(() -> {
+                    toast("Receipt scanned.");
+                    showReceiptDetail(receiptId, fromArchiveView);
+                });
+            } catch (Exception exception) {
+                markReceiptScanFailed(receipt, exception);
+                runOnUiThread(() -> {
+                    toast("AI scan failed: " + exception.getMessage());
+                    showReceiptDetail(receiptId, fromArchiveView);
+                });
+            }
+        });
+    }
+
+    private Receipt applyExtractionToReceipt(Receipt receipt, ReceiptExtraction extraction) {
+        String categoryId = receipt.categoryId;
+        if (shouldReplaceCategory(receipt)) {
+            categoryId = resolveCategoryId(extraction);
+        }
+
+        String merchant = shouldReplaceText(receipt.merchant) ? extraction.merchant : receipt.merchant;
+        String date = shouldReplaceText(receipt.date) ? extraction.date : receipt.date;
+        double total = receipt.total <= 0 ? extraction.total : receipt.total;
+        List<ReceiptItem> items = receipt.items == null || receipt.items.isEmpty()
+                ? extraction.items
+                : receipt.items;
+        String rawText = shouldReplaceText(receipt.rawText) ? extraction.rawText : receipt.rawText;
+
+        return new Receipt(
+                receipt.id,
+                categoryId,
+                merchant == null ? "" : merchant,
+                date == null ? "" : date,
+                total,
+                receipt.photoPath,
+                items == null ? new ArrayList<>() : new ArrayList<>(items),
+                rawText == null ? "" : rawText,
+                receipt.createdAt,
+                receipt.archived,
+                Receipt.AI_SCAN_EXTRACTED,
+                System.currentTimeMillis(),
+                ""
+        );
+    }
+
+    private void markReceiptScanFailed(Receipt receipt, Exception exception) {
+        Receipt failedReceipt = new Receipt(
+                receipt.id,
+                receipt.categoryId,
+                receipt.merchant,
+                receipt.date,
+                receipt.total,
+                receipt.photoPath,
+                receipt.items == null ? new ArrayList<>() : new ArrayList<>(receipt.items),
+                receipt.rawText,
+                receipt.createdAt,
+                receipt.archived,
+                Receipt.AI_SCAN_FAILED,
+                receipt.aiScannedAt,
+                exception.getMessage()
+        );
+        receiptStore.updateReceipt(failedReceipt);
+    }
+
+    private boolean shouldReplaceText(String value) {
+        String clean = value == null ? "" : value.trim();
+        return clean.isEmpty()
+                || "Receipt".equalsIgnoreCase(clean)
+                || "Unknown merchant".equalsIgnoreCase(clean);
+    }
+
+    private boolean shouldReplaceCategory(Receipt receipt) {
+        Category category = receiptStore.getCategory(receipt.categoryId);
+        return category == null || "Other".equalsIgnoreCase(category.name);
+    }
+
+    private String aiScanLabel(Receipt receipt) {
+        if (Receipt.AI_SCAN_EXTRACTED.equals(receipt.aiScanStatus)) {
+            return "AI scanned";
+        }
+        if (Receipt.AI_SCAN_FAILED.equals(receipt.aiScanStatus)) {
+            return "AI scan failed";
+        }
+        return "Manual receipt";
     }
 
     private void addEditableItemRow(LinearLayout container, List<EditItemRow> editRows, String nameValue, double costValue) {
