@@ -5,6 +5,7 @@ import android.content.SharedPreferences;
 
 import java.util.Currency;
 import java.util.Locale;
+import java.util.UUID;
 
 public class SettingsStore {
     public static final String DEFAULT_BACKEND_URL = "http://10.0.2.2:8787";
@@ -16,6 +17,7 @@ public class SettingsStore {
     private static final String KEY_ALLOW_AI_NEW_CATEGORIES = "allow_ai_new_categories";
     private static final String KEY_BACKEND_URL = "backend_url";
     private static final String KEY_CURRENCY = "currency";
+    private static final String KEY_INSTALLATION_ID = "installation_id";
     private static final String KEY_THEME = "theme";
 
     private final SharedPreferences preferences;
@@ -43,6 +45,15 @@ public class SettingsStore {
 
     public void setAllowAiNewCategories(boolean allow) {
         preferences.edit().putBoolean(KEY_ALLOW_AI_NEW_CATEGORIES, allow).apply();
+    }
+
+    public String getInstallationId() {
+        String installationId = preferences.getString(KEY_INSTALLATION_ID, "");
+        if (installationId == null || installationId.trim().isEmpty()) {
+            installationId = UUID.randomUUID().toString();
+            preferences.edit().putString(KEY_INSTALLATION_ID, installationId).apply();
+        }
+        return installationId;
     }
 
     public String getCurrencyCode() {

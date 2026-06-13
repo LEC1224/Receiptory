@@ -8,11 +8,25 @@ En native Android-app for att fotografera kvitton, extrahera inkopsdata via en l
 - Settings-vy med ljust, morkt eller systemstyrt lage samt URL till AI-backend.
 - Lokal lagring av originalbild, extraherad text, varurader och totalsumma.
 - Kvitton kan sparas manuellt for att AI-skannas senare.
+- AI-skanning anvander kopta Google Play scan credits. Manuell kvittoinmatning ar gratis.
 - Kategorivy med total spendering per kategori och filter for manad, ar eller eget datumspann.
 - Kvitton visas kronologiskt med thumbnail, datum och total.
 - Kvitton kan flyttas mellan kategorier och anvandaren kan skapa egna kategorier.
 - Storage-vyn kan skanna alla manuellt sparade, oskannade kvitton i efterhand.
 - AI-backenden skickar med alla befintliga kategorier och later modellen antingen valja en befintlig kategori eller foresla en ny.
+- Settings-vyn visar kvarvarande AI scans och kopknappar for 100, 500 och 2000 scans.
+
+## Google Play produkter
+
+Skapa dessa one-time in-app products i Play Console innan release:
+
+| Product ID | Scans | Pris |
+| --- | ---: | ---: |
+| `ai_scans_100` | 100 | USD 2.00 |
+| `ai_scans_500` | 500 | USD 5.00 |
+| `ai_scans_2000` | 2000 | USD 10.00 |
+
+Backenden maste ha Android Publisher API-atkomst via `GOOGLE_PLAY_SERVICE_ACCOUNT_FILE` eller `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` for att verifiera kop innan credits laggs till.
 
 ## AI-backend pa Windows
 

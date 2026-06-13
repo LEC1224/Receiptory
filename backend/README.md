@@ -6,26 +6,44 @@ This backend runs on your Windows PC and keeps the OpenAI API key off the Androi
 
 - Node.js 18 or newer on the Windows PC
 - An OpenAI API key stored only on the PC
+- Google Play Android Publisher API credentials for validating AI scan pack purchases
 - The phone and PC on the same network, or an emulator using `http://10.0.2.2:8787`
 
 ## Setup
 
 1. Copy `backend/.env.example` to `backend/.env`.
 2. Put your OpenAI key in `OPENAI_API_KEY`.
-3. Start the backend:
+3. Set Google Play purchase verification:
+
+```text
+GOOGLE_PLAY_PACKAGE_NAME=se.kvittordning.app
+GOOGLE_PLAY_SERVICE_ACCOUNT_FILE=C:\secure\play-service-account.json
+```
+
+The service account must have Android Publisher access to the app in Play Console. The backend validates the Play purchase token, grants credits once per token in `entitlements.json`, then consumes the product so scan packs can be bought again.
+
+Create these one-time in-app products in Play Console:
+
+| Product ID | Title | Reward | Price |
+| --- | --- | ---: | ---: |
+| `ai_scans_100` | 100 AI scans | 100 scans | USD 2.00 |
+| `ai_scans_500` | 500 AI scans | 500 scans | USD 5.00 |
+| `ai_scans_2000` | 2000 AI scans | 2000 scans | USD 10.00 |
+
+4. Start the backend:
 
 ```powershell
 cd D:\Documents\Kvittordning\backend
 .\start-receiptory-backend.ps1
 ```
 
-4. Test from the PC:
+5. Test from the PC:
 
 ```powershell
 Invoke-RestMethod http://localhost:8787/health
 ```
 
-5. If using a physical phone, set the app's Backend URL to your PC LAN address, for example:
+6. If using a physical phone, set the app's Backend URL to your PC LAN address, for example:
 
 ```text
 http://192.168.1.50:8787

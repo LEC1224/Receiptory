@@ -59,6 +59,7 @@ import androidx.core.content.ContextCompat;
 import androidx.exifinterface.media.ExifInterface;
 
 import com.google.common.util.concurrent.ListenableFuture;
+import com.android.billingclient.api.Purchase;
 
 import java.io.File;
 import java.io.InputStream;
@@ -72,14 +73,16 @@ import java.util.Collections;
 import java.util.Currency;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends ComponentActivity {
+public class MainActivity extends ComponentActivity implements BillingManager.Listener {
     private static final int CAMERA_PERMISSION_REQUEST = 42;
     private static final String[] CATEGORY_ICONS = {
             "🧾", "🛒", "🍽", "🛠", "💻", "📱", "⛽", "🏥", "🏠", "👕",
@@ -102,6 +105,9 @@ public class MainActivity extends ComponentActivity {
     private ReceiptStore receiptStore;
     private SettingsStore settingsStore;
     private ReceiptBackendClient receiptExtractor;
+    private BillingManager billingManager;
+    private EntitlementState entitlementState = EntitlementState.empty();
+    private final Set<String> verifyingPurchaseTokens = new HashSet<>();
     private ImageCapture imageCapture;
     private File pendingCapture;
     private DateFilter activeFilter = DateFilter.all();
@@ -116,6 +122,7 @@ public class MainActivity extends ComponentActivity {
     private ActivityResultLauncher<String> createBackupLauncher;
     private ActivityResultLauncher<String[]> restoreBackupLauncher;
     private boolean pendingRestoreReplace = false;
+    private boolean settingsVisible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -124,6 +131,7 @@ public class MainActivity extends ComponentActivity {
         receiptStore.ensureDefaultCategories();
         settingsStore = new SettingsStore(this);
         receiptExtractor = new ReceiptBackendClient();
+        billingManager = new BillingManager(this, this);
         palette = Palette.from(this, settingsStore.getTheme());
         registerBackupRestoreLaunchers();
         applySystemBars();
@@ -135,6 +143,8 @@ public class MainActivity extends ComponentActivity {
             return insets;
         });
         setContentView(root);
+        billingManager.start();
+        refreshEntitlements(false);
         showCamera();
     }
 
@@ -170,6 +180,7 @@ public class MainActivity extends ComponentActivity {
         cameraExecutor.shutdown();
         apiExecutor.shutdown();
         imageExecutor.shutdown();
+        billingManager.destroy();
     }
 
     @Override
@@ -349,6 +360,9 @@ public class MainActivity extends ComponentActivity {
             showSettings();
             return;
         }
+        if (!ensureAiCreditsOrOpenStore(1)) {
+            return;
+        }
 
         showLoading("Reading receipt...");
         apiExecutor.execute(() -> {
@@ -358,7 +372,8 @@ public class MainActivity extends ComponentActivity {
                         storedPhoto,
                         receiptStore.getCategories(),
                         backendUrl,
-                        settingsStore.allowAiNewCategories()
+                        settingsStore.allowAiNewCategories(),
+                        settingsStore.getInstallationId()
                 );
                 String categoryId = resolveCategoryId(extraction);
                 String receiptDate = extraction.date == null || extraction.date.isEmpty()
@@ -380,7 +395,10 @@ public class MainActivity extends ComponentActivity {
                         ""
                 );
                 receiptStore.addReceipt(receipt);
-                runOnUiThread(() -> showReceiptDetail(receipt.id));
+                runOnUiThread(() -> {
+                    refreshEntitlements(false);
+                    showReceiptDetail(receipt.id);
+                });
             } catch (Exception exception) {
                 runOnUiThread(() -> {
                     toast(exception.getMessage());
@@ -477,6 +495,8 @@ public class MainActivity extends ComponentActivity {
         allowAiNewCategories.setPadding(dp(6), dp(8), dp(6), dp(8));
         aiCard.addView(allowAiNewCategories, matchWrap());
         content.addView(aiCard, matchWrap());
+
+        addStoreCard(content);
 
         LinearLayout moneyCard = card();
         moneyCard.addView(label("Currency"));
@@ -836,6 +856,29 @@ public class MainActivity extends ComponentActivity {
         content.addView(rawTextCard, matchWrap());
     }
 
+    private void addStoreCard(LinearLayout content) {
+        LinearLayout storeCard = card();
+        storeCard.addView(label("AI scan credits"));
+        storeCard.addView(subtitle(entitlementState.remainingScans + " AI scans remaining. Manual receipt entry is free."));
+        Button refresh = iconButtonText(R.drawable.ic_spark, "Refresh credits");
+        storeCard.addView(refresh, compactButtonParams());
+        refresh.setOnClickListener(view -> refreshEntitlements(true));
+
+        for (AiScanPack pack : AiScanPack.PACKS) {
+            Button buy = iconButtonText(
+                    R.drawable.ic_wallet,
+                    pack.scans + " AI scans - " + billingManager.priceFor(pack)
+            );
+            buy.setEnabled(billingManager.hasProductDetails(pack));
+            if (!billingManager.hasProductDetails(pack)) {
+                buy.setAlpha(0.55f);
+            }
+            storeCard.addView(buy, compactButtonParams());
+            buy.setOnClickListener(view -> billingManager.launchPurchase(pack));
+        }
+        content.addView(storeCard, matchWrap());
+    }
+
     private void confirmDeleteReceipt(String receiptId, boolean fromArchiveView) {
         Receipt receipt = receiptStore.getReceipt(receiptId);
         if (receipt == null) {
@@ -1040,6 +1083,9 @@ public class MainActivity extends ComponentActivity {
         }
 
         List<Receipt> unscannedReceipts = receiptStore.getUnscannedReceipts();
+        if (!ensureAiCreditsOrOpenStore(unscannedReceipts.size())) {
+            return;
+        }
         showLoading("Scanning " + unscannedReceipts.size() + " receipts...");
         apiExecutor.execute(() -> {
             int scanned = 0;
@@ -1050,7 +1096,8 @@ public class MainActivity extends ComponentActivity {
                             new File(receipt.photoPath),
                             receiptStore.getCategories(),
                             backendUrl,
-                            settingsStore.allowAiNewCategories()
+                            settingsStore.allowAiNewCategories(),
+                            settingsStore.getInstallationId()
                     );
                     receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
                     scanned++;
@@ -1062,6 +1109,7 @@ public class MainActivity extends ComponentActivity {
             int scannedCount = scanned;
             int failedCount = failed;
             runOnUiThread(() -> {
+                refreshEntitlements(false);
                 toast("AI scan complete: " + scannedCount + " updated"
                         + (failedCount > 0 ? ", " + failedCount + " failed" : "") + ".");
                 showCategories();
@@ -1082,6 +1130,9 @@ public class MainActivity extends ComponentActivity {
             showCategories();
             return;
         }
+        if (!ensureAiCreditsOrOpenStore(1)) {
+            return;
+        }
 
         showLoading("Scanning receipt...");
         apiExecutor.execute(() -> {
@@ -1090,10 +1141,12 @@ public class MainActivity extends ComponentActivity {
                         new File(receipt.photoPath),
                         receiptStore.getCategories(),
                         backendUrl,
-                        settingsStore.allowAiNewCategories()
+                        settingsStore.allowAiNewCategories(),
+                        settingsStore.getInstallationId()
                 );
                 receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
                 runOnUiThread(() -> {
+                    refreshEntitlements(false);
                     toast("Receipt scanned.");
                     showReceiptDetail(receiptId, fromArchiveView);
                 });
@@ -2089,6 +2142,7 @@ public class MainActivity extends ComponentActivity {
 
     private void showLoading(String message) {
         currentBackAction = null;
+        settingsVisible = false;
         LinearLayout loading = new LinearLayout(this);
         loading.setOrientation(LinearLayout.VERTICAL);
         loading.setGravity(Gravity.CENTER);
@@ -2101,9 +2155,113 @@ public class MainActivity extends ComponentActivity {
         transitionRootView(loading, palette.surface);
     }
 
+    private boolean ensureAiCreditsOrOpenStore(int scansNeeded) {
+        if (entitlementState.remainingScans >= scansNeeded) {
+            return true;
+        }
+        toast(scansNeeded == 1
+                ? "Buy AI scan credits to scan this receipt. Manual entry is still free."
+                : "Buy more AI scan credits to scan these receipts. Manual entry is still free.");
+        showSettings();
+        refreshEntitlements(true);
+        return false;
+    }
+
+    private void refreshEntitlements(boolean showResult) {
+        String backendUrl = settingsStore.getBackendUrl();
+        if (backendUrl == null || backendUrl.trim().isEmpty()) {
+            return;
+        }
+        apiExecutor.execute(() -> {
+            try {
+                EntitlementState refreshed = receiptExtractor.getEntitlements(
+                        backendUrl,
+                        settingsStore.getInstallationId()
+                );
+                runOnUiThread(() -> {
+                    entitlementState = refreshed;
+                    if (showResult) {
+                        toast(refreshed.remainingScans + " AI scans remaining.");
+                        showSettings();
+                    }
+                });
+            } catch (Exception exception) {
+                if (showResult) {
+                    runOnUiThread(() -> toast("Could not refresh credits: " + exception.getMessage()));
+                }
+            }
+        });
+    }
+
+    @Override
+    public void onProductsUpdated() {
+        if (settingsVisible) {
+            runOnUiThread(this::showSettings);
+        }
+    }
+
+    @Override
+    public void onPurchaseReadyForVerification(Purchase purchase) {
+        if (purchase == null || verifyingPurchaseTokens.contains(purchase.getPurchaseToken())) {
+            return;
+        }
+        String productId = null;
+        for (String candidate : purchase.getProducts()) {
+            if (AiScanPack.find(candidate) != null) {
+                productId = candidate;
+                break;
+            }
+        }
+        if (productId == null) {
+            return;
+        }
+
+        verifyingPurchaseTokens.add(purchase.getPurchaseToken());
+        showLoading("Verifying purchase...");
+        String backendUrl = settingsStore.getBackendUrl();
+        String verifiedProductId = productId;
+        apiExecutor.execute(() -> {
+            try {
+                PurchaseVerification verification = receiptExtractor.verifyPurchase(
+                        backendUrl,
+                        settingsStore.getInstallationId(),
+                        verifiedProductId,
+                        purchase.getPurchaseToken()
+                );
+                runOnUiThread(() -> {
+                    verifyingPurchaseTokens.remove(purchase.getPurchaseToken());
+                    entitlementState = verification.entitlementState;
+                    if (verification.ok) {
+                        String message = verification.alreadyGranted
+                                ? "Purchase already added. "
+                                : "Added " + verification.grantedScans + " AI scans. ";
+                        toast(message + entitlementState.remainingScans + " remaining.");
+                    } else {
+                        toast("Purchase could not be verified.");
+                    }
+                    showSettings();
+                });
+            } catch (Exception exception) {
+                runOnUiThread(() -> {
+                    verifyingPurchaseTokens.remove(purchase.getPurchaseToken());
+                    toast("Purchase verification failed: " + exception.getMessage());
+                    showSettings();
+                });
+            }
+        });
+    }
+
+    @Override
+    public void onBillingUnavailable(String message) {
+        runOnUiThread(() -> toast(message == null || message.trim().isEmpty()
+                ? "Google Play billing is unavailable."
+                : message));
+    }
+
     private ScrollView page(String titleText, Runnable backAction) {
         currentBackAction = backAction;
         fullscreenReceiptId = null;
+        settingsVisible = "Settings".equals(titleText);
         ScrollView scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(palette.surface);
         LinearLayout content = new LinearLayout(this);

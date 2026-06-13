@@ -22,7 +22,8 @@ public class ReceiptBackendClient {
             File imageFile,
             List<Category> categories,
             String backendUrl,
-            boolean allowNewCategories
+            boolean allowNewCategories,
+            String userId
     )
             throws IOException, JSONException {
         if (backendUrl == null || backendUrl.trim().isEmpty()) {
@@ -36,7 +37,7 @@ public class ReceiptBackendClient {
         connection.setReadTimeout(90000);
         connection.setRequestProperty("Content-Type", "application/json");
 
-        byte[] body = buildRequest(imageFile, categories, allowNewCategories)
+        byte[] body = buildRequest(imageFile, categories, allowNewCategories, userId)
                 .toString()
                 .getBytes(StandardCharsets.UTF_8);
         try (OutputStream output = connection.getOutputStream()) {
@@ -54,14 +55,37 @@ public class ReceiptBackendClient {
         return ReceiptExtraction.fromJson(new JSONObject(response));
     }
 
+    public EntitlementState getEntitlements(String backendUrl, String userId) throws IOException, JSONException {
+        JSONObject request = new JSONObject();
+        request.put("user_id", userId);
+        JSONObject response = postJson(backendUrl, "/entitlements", request);
+        return EntitlementState.fromJson(response);
+    }
+
+    public PurchaseVerification verifyPurchase(
+            String backendUrl,
+            String userId,
+            String productId,
+            String purchaseToken
+    ) throws IOException, JSONException {
+        JSONObject request = new JSONObject();
+        request.put("user_id", userId);
+        request.put("product_id", productId);
+        request.put("purchase_token", purchaseToken);
+        JSONObject response = postJson(backendUrl, "/purchases/verify", request);
+        return PurchaseVerification.fromJson(response);
+    }
+
     private JSONObject buildRequest(
             File imageFile,
             List<Category> categories,
-            boolean allowNewCategories
+            boolean allowNewCategories,
+            String userId
     ) throws IOException, JSONException {
         JSONObject root = new JSONObject();
         root.put("image_base64", encodeFile(imageFile));
         root.put("allow_new_categories", allowNewCategories);
+        root.put("user_id", userId);
 
         JSONArray categoryArray = new JSONArray();
         for (Category category : categories) {
@@ -74,12 +98,42 @@ public class ReceiptBackendClient {
         return root;
     }
 
+    private JSONObject postJson(String backendUrl, String path, JSONObject request) throws IOException, JSONException {
+        if (backendUrl == null || backendUrl.trim().isEmpty()) {
+            throw new IOException("Missing AI backend URL.");
+        }
+        HttpURLConnection connection = (HttpURLConnection) new URL(endpointUrl(backendUrl, path)).openConnection();
+        connection.setRequestMethod("POST");
+        connection.setDoOutput(true);
+        connection.setConnectTimeout(30000);
+        connection.setReadTimeout(90000);
+        connection.setRequestProperty("Content-Type", "application/json");
+
+        byte[] body = request.toString().getBytes(StandardCharsets.UTF_8);
+        try (OutputStream output = connection.getOutputStream()) {
+            output.write(body);
+        }
+
+        int status = connection.getResponseCode();
+        String response = readStream(status >= 200 && status < 300
+                ? connection.getInputStream()
+                : connection.getErrorStream());
+        if (status < 200 || status >= 300) {
+            throw new IOException("Backend request failed: " + response);
+        }
+        return new JSONObject(response);
+    }
+
     private String extractUrl(String backendUrl) {
+        return endpointUrl(backendUrl, "/extract");
+    }
+
+    private String endpointUrl(String backendUrl, String path) {
         String cleanUrl = backendUrl.trim();
         while (cleanUrl.endsWith("/")) {
             cleanUrl = cleanUrl.substring(0, cleanUrl.length() - 1);
         }
-        return cleanUrl + "/extract";
+        return cleanUrl + path;
     }
 
     private static String encodeFile(File file) throws IOException {
