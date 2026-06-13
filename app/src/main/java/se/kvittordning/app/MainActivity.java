@@ -84,6 +84,8 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends ComponentActivity implements BillingManager.Listener {
     private static final int CAMERA_PERMISSION_REQUEST = 42;
+    private static final String PRIVACY_POLICY_URL = "https://github.com/LEC1224/Receiptory/blob/master/PRIVACY_POLICY.md";
+    private static final String TERMS_URL = "https://github.com/LEC1224/Receiptory/blob/master/TERMS.md";
     private static final String[] CATEGORY_ICONS = {
             "🧾", "🛒", "🍽", "🛠", "💻", "📱", "⛽", "🏥", "🏠", "👕",
             "✈", "🏨", "☕", "🎁", "🎓", "⚡", "🧴", "🧰", "📦", "💳"
@@ -259,7 +261,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
             startCamera(previewView);
         } else {
-            requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST);
+            requestCameraPermissionWithContext();
         }
     }
 
@@ -344,7 +346,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         actions.addView(retake, weightedButton());
         retake.setOnClickListener(view -> showCamera());
 
-        Button submit = primaryButton("Submit");
+        Button submit = primaryButton("Scan with AI");
         actions.addView(submit, weightedButton());
         submit.setOnClickListener(view -> submitReceipt(photoFile));
 
@@ -364,7 +366,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             return;
         }
 
-        showLoading("Reading receipt...");
+        showLoading("Uploading receipt photo to AI backend...");
         apiExecutor.execute(() -> {
             try {
                 File storedPhoto = receiptStore.savePhoto(Uri.fromFile(photoFile));
@@ -481,6 +483,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout aiCard = card();
         aiCard.addView(label("AI backend"));
+        aiCard.addView(subtitle("AI scans upload the receipt photo, category names, and your installation ID to this backend. The backend forwards the photo and category context to OpenAI for extraction."));
 
         EditText backendUrl = input("Backend URL");
         backendUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
@@ -496,6 +499,14 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         aiCard.addView(allowAiNewCategories, matchWrap());
         content.addView(aiCard, matchWrap());
 
+        LinearLayout trustCard = card();
+        trustCard.addView(label("Trust and privacy"));
+        trustCard.addView(subtitle("See what stays on this device, what is uploaded for AI scanning, and where to find the Privacy Policy and Terms."));
+        Button trust = iconButtonText(R.drawable.ic_receipt, "Open trust and privacy");
+        trustCard.addView(trust, compactButtonParams());
+        trust.setOnClickListener(view -> showTrustAndPrivacy());
+        content.addView(trustCard, matchWrap());
+
         addStoreCard(content);
 
         LinearLayout moneyCard = card();
@@ -508,7 +519,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout backupCard = card();
         backupCard.addView(label("Local backup"));
-        backupCard.addView(subtitle("Export a portable backup with receipts and photos, or restore one onto this device."));
+        backupCard.addView(subtitle("Export creates a zip file with local receipt records and stored photos. Restore imports a backup onto this device."));
         Button backup = iconButtonText(R.drawable.ic_folder, "Back up receipts");
         backupCard.addView(backup, compactButtonParams());
         backup.setOnClickListener(view -> startBackup());
@@ -596,6 +607,47 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                 });
             }
         });
+    }
+
+    private void showTrustAndPrivacy() {
+        ScrollView scrollView = page("Trust and privacy", this::showSettings);
+        LinearLayout content = (LinearLayout) scrollView.getChildAt(0);
+
+        LinearLayout localCard = card();
+        localCard.addView(label("Stored on this device"));
+        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, backend URL, and this app installation ID are stored in the app's local storage."));
+        localCard.addView(subtitle("Manual receipt entry stays local unless you later choose to scan that saved receipt with AI."));
+        content.addView(localCard, matchWrap());
+
+        LinearLayout uploadCard = card();
+        uploadCard.addView(label("Uploaded for AI scanning"));
+        uploadCard.addView(subtitle("When you choose an AI scan, the app uploads the receipt photo, category names, the allow-new-categories setting, and the installation ID to the configured backend URL."));
+        uploadCard.addView(subtitle("The backend sends the receipt image and category context to OpenAI, then returns merchant, date, total, item rows, raw extracted text, and a category decision."));
+        uploadCard.addView(subtitle("The backend also receives the installation ID for scan credit checks and purchase verification. Google Play purchase tokens are sent to the backend only when verifying scan pack purchases."));
+        content.addView(uploadCard, matchWrap());
+
+        LinearLayout controlCard = card();
+        controlCard.addView(label("Deletion and export"));
+        controlCard.addView(subtitle("Deleting a receipt removes its local record and stored photo. Deleting a category removes that local category and the receipts/photos in it."));
+        controlCard.addView(subtitle("Export creates a zip backup containing local receipt data and photos. Restore reads a selected backup file and imports it onto this device."));
+        controlCard.addView(subtitle("The app does not currently provide an in-app request to delete data that may have been processed by your configured backend or OpenAI."));
+        content.addView(controlCard, matchWrap());
+
+        LinearLayout permissionCard = card();
+        permissionCard.addView(label("Permissions"));
+        permissionCard.addView(subtitle("Camera is used to photograph receipts. Internet is used for AI scanning, scan credit checks, purchase verification, and opening policy links. Billing is used for Google Play AI scan pack purchases."));
+        content.addView(permissionCard, matchWrap());
+
+        LinearLayout linksCard = card();
+        linksCard.addView(label("Policies"));
+        linksCard.addView(subtitle("These documents are versioned in the GitHub repository so the Play listing can point to stable public URLs."));
+        Button privacy = iconButtonText(R.drawable.ic_receipt, "Privacy Policy");
+        linksCard.addView(privacy, compactButtonParams());
+        privacy.setOnClickListener(view -> openExternalUrl(PRIVACY_POLICY_URL));
+        Button terms = iconButtonText(R.drawable.ic_receipt, "Terms");
+        linksCard.addView(terms, compactButtonParams());
+        terms.setOnClickListener(view -> openExternalUrl(TERMS_URL));
+        content.addView(linksCard, matchWrap());
     }
 
     private void showCategories() {
@@ -1068,7 +1120,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         }
         new AlertDialog.Builder(this)
                 .setTitle("Scan all unscanned receipts?")
-                .setMessage("This will process " + unscannedReceipts.size() + " stored receipt photos and fill missing details without overwriting existing manual fields.")
+                .setMessage("This uploads " + unscannedReceipts.size() + " stored receipt photos to the configured AI backend and fills missing details without overwriting existing manual fields.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Scan", (dialog, which) -> scanAllUnscanned())
                 .show();
@@ -1086,7 +1138,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         if (!ensureAiCreditsOrOpenStore(unscannedReceipts.size())) {
             return;
         }
-        showLoading("Scanning " + unscannedReceipts.size() + " receipts...");
+        showLoading("Uploading " + unscannedReceipts.size() + " receipts to AI backend...");
         apiExecutor.execute(() -> {
             int scanned = 0;
             int failed = 0;
@@ -1134,7 +1186,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             return;
         }
 
-        showLoading("Scanning receipt...");
+        showLoading("Uploading receipt photo to AI backend...");
         apiExecutor.execute(() -> {
             try {
                 ReceiptExtraction extraction = receiptExtractor.extract(
@@ -2573,6 +2625,14 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         Toast.makeText(this, message == null ? "Something went wrong." : message, Toast.LENGTH_LONG).show();
     }
 
+    private void openExternalUrl(String url) {
+        try {
+            startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(url)));
+        } catch (Exception exception) {
+            toast("Could not open link: " + exception.getMessage());
+        }
+    }
+
     private void applySystemBars() {
         getWindow().setStatusBarColor(palette.surface);
         getWindow().setNavigationBarColor(palette.surface);
@@ -2684,6 +2744,17 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         } else {
             toast("Camera permission is needed to photograph receipts.");
         }
+    }
+
+    private void requestCameraPermissionWithContext() {
+        new AlertDialog.Builder(this)
+                .setTitle("Camera access")
+                .setMessage("Receiptory uses the camera only to photograph receipts. Saved photos stay on this device unless you choose an AI scan, which uploads the receipt photo to your configured backend.")
+                .setNegativeButton("Not now", (dialog, which) ->
+                        toast("Camera permission is needed to photograph receipts."))
+                .setPositiveButton("Continue", (dialog, which) ->
+                        requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_PERMISSION_REQUEST))
+                .show();
     }
 
     private FrameLayout.LayoutParams cornerButtonParams(int gravity) {

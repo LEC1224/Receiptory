@@ -18,7 +18,6 @@ import java.nio.charset.StandardCharsets;
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -68,9 +67,13 @@ public class ReceiptStore {
     public List<Receipt> getReceipts(boolean includeArchived) {
         List<Receipt> sorted = new ArrayList<>(receipts);
         if (!includeArchived) {
-            sorted.removeIf(receipt -> receipt.archived);
+            for (int index = sorted.size() - 1; index >= 0; index--) {
+                if (sorted.get(index).archived) {
+                    sorted.remove(index);
+                }
+            }
         }
-        sorted.sort((left, right) -> Long.compare(right.createdAt, left.createdAt));
+        Collections.sort(sorted, (left, right) -> Long.compare(right.createdAt, left.createdAt));
         return sorted;
     }
 
@@ -81,7 +84,7 @@ public class ReceiptStore {
                 archived.add(receipt);
             }
         }
-        archived.sort((left, right) -> Long.compare(right.createdAt, left.createdAt));
+        Collections.sort(archived, (left, right) -> Long.compare(right.createdAt, left.createdAt));
         return archived;
     }
 
@@ -92,7 +95,7 @@ public class ReceiptStore {
                 unscanned.add(receipt);
             }
         }
-        unscanned.sort((left, right) -> Long.compare(left.createdAt, right.createdAt));
+        Collections.sort(unscanned, (left, right) -> Long.compare(left.createdAt, right.createdAt));
         return unscanned;
     }
 
@@ -107,7 +110,7 @@ public class ReceiptStore {
                 filtered.add(receipt);
             }
         }
-        filtered.sort((left, right) -> Long.compare(right.createdAt, left.createdAt));
+        Collections.sort(filtered, (left, right) -> Long.compare(right.createdAt, left.createdAt));
         return filtered;
     }
 
@@ -436,7 +439,8 @@ public class ReceiptStore {
         JSONArray receiptArray = new JSONArray();
 
         List<Category> sortedCategories = new ArrayList<>(categories);
-        Collections.sort(sortedCategories, Comparator.comparing(category -> category.name.toLowerCase(Locale.ROOT)));
+        Collections.sort(sortedCategories, (left, right) ->
+                left.name.toLowerCase(Locale.ROOT).compareTo(right.name.toLowerCase(Locale.ROOT)));
         for (Category category : sortedCategories) {
             categoryArray.put(category.toJson());
         }

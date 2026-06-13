@@ -16,6 +16,23 @@ En native Android-app for att fotografera kvitton, extrahera inkopsdata via en l
 - AI-backenden skickar med alla befintliga kategorier och later modellen antingen valja en befintlig kategori eller foresla en ny.
 - Settings-vyn visar kvarvarande AI scans och kopknappar for 100, 500 och 2000 scans.
 
+## Privacy, trust och Play Console
+
+Publika dokument for Google Play:
+
+- Privacy Policy: https://github.com/LEC1224/Receiptory/blob/master/PRIVACY_POLICY.md
+- Terms: https://github.com/LEC1224/Receiptory/blob/master/TERMS.md
+- Data Safety worksheet: `docs/google-play-data-safety.md`
+
+Kort dataflode:
+
+- Sparade kvitton, foton, kategorier, extraherad text och installningsdata lagras lokalt i appens private storage.
+- Manuell kvittoinmatning stannar lokalt om anvandaren inte senare valjer AI-skanning.
+- AI-skanning laddar upp kvittofoto, kategorier, AI-kategoriinstallning och installation ID till den backend-URL som ar satt i Settings.
+- Den inkluderade backenden skickar kvittobilden och kategori-kontext vidare till OpenAI for extraktion.
+- Google Play purchase tokens skickas till backenden nar scan packs verifieras.
+- Export skapar en zip med lokal kvittodata och foton. Lokal radering tar bort appens lokala kvitto och foto, men ar inte en fjarraderingsbegaran till backend eller OpenAI.
+
 ## Google Play produkter
 
 Skapa dessa one-time in-app products i Play Console innan release:
