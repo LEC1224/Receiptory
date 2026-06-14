@@ -5,10 +5,10 @@ En native Android-app for att fotografera kvitton, extrahera inkopsdata via en l
 ## Funktioner
 
 - Kamera som startvy med slutarknapp, retake och submit.
-- Settings-vy med ljust, morkt eller systemstyrt lage samt URL till AI-backend.
+- Settings-vy med ljust, morkt eller systemstyrt lage, URL till AI-backend och valfri egen OpenAI-nyckel for power users.
 - Lokal lagring av originalbild, extraherad text, varurader och totalsumma.
 - Kvitton kan sparas manuellt for att AI-skannas senare.
-- AI-skanning anvander kopta Google Play scan credits. Manuell kvittoinmatning ar gratis.
+- AI-skanning anvander kopta Google Play scan credits som standard. Power users kan valfritt aktivera egen OpenAI-nyckel for att skanna utan att forbruka credits.
 - Kategorivy med total spendering per kategori och filter for manad, ar eller eget datumspann.
 - Kvitton visas kronologiskt med thumbnail, datum och total.
 - Kvitton kan flyttas mellan kategorier och anvandaren kan skapa egna kategorier.
@@ -30,6 +30,7 @@ Kort dataflode:
 - Manuell kvittoinmatning stannar lokalt om anvandaren inte senare valjer AI-skanning.
 - AI-skanning laddar upp kvittofoto, kategorier, AI-kategoriinstallning och installation ID till den backend-URL som ar satt i Settings.
 - Den inkluderade backenden skickar kvittobilden och kategori-kontext vidare till OpenAI for extraktion.
+- Om egen OpenAI-nyckel aktiveras skickar appen kvittofoto och kategori-kontext direkt till OpenAI fran enheten och anvander inte backend scan credits for sjalva extraktionen.
 - Google Play purchase tokens skickas till backenden nar scan packs verifieras.
 - Export skapar en zip med lokal kvittodata och foton. Lokal radering tar bort appens lokala kvitto och foto, men ar inte en fjarraderingsbegaran till backend eller OpenAI.
 
@@ -47,7 +48,7 @@ Backenden maste ha Android Publisher API-atkomst via `GOOGLE_PLAY_SERVICE_ACCOUN
 
 ## AI-backend pa Windows
 
-Appen lagrar inte langre nagon OpenAI API-nyckel. Kor i stallet backend-tjansten pa din Windows-PC och ange datorns URL i appens settings.
+Appen anvander backend scan credits som standard. Egen OpenAI API-nyckel kan aktiveras i settings for power users som vill betala OpenAI direkt och inte forbruka backend credits.
 
 ```powershell
 cd backend

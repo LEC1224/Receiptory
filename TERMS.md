@@ -10,7 +10,9 @@ Receiptory helps store receipt photos and extract receipt details. AI extraction
 
 ## AI scanning
 
-AI scanning requires a configured backend URL and available AI scan credits. During an AI scan, receipt photos and category context are uploaded to the configured backend and forwarded to OpenAI for extraction.
+AI scanning uses the configured backend URL and available AI scan credits by default. During a default AI scan, receipt photos and category context are uploaded to the configured backend and forwarded to OpenAI for extraction.
+
+You may enable own OpenAI key mode in Settings. In that mode, AI scans use the OpenAI API key and model you provide, send receipt photos and category context directly to OpenAI from your device, and do not consume backend scan credits for extraction.
 
 Manual receipt entry does not require AI scan credits.
 
@@ -23,6 +25,7 @@ AI scan packs are purchased through Google Play Billing. The included backend va
 You are responsible for:
 
 - Choosing and operating a backend URL you trust
+- Safeguarding any OpenAI API key you enter into the app
 - Keeping exported backups secure
 - Reviewing AI-extracted data before using it for financial, tax, reimbursement, or recordkeeping decisions
 - Complying with laws and policies that apply to your use of receipt data

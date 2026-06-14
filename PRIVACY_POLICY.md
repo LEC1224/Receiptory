@@ -11,7 +11,7 @@ Receiptory stores the following in the app's local storage:
 - Receipt photos you save
 - Receipt records, including merchant, date, total, category, item rows, and extracted text
 - Categories and AI-suggested category names
-- App settings, including theme, currency, backend URL, AI category setting, and a generated installation ID
+- App settings, including theme, currency, backend URL, optional OpenAI key/model, AI category setting, and a generated installation ID
 
 Manual receipt entry stays on your device unless you later choose to scan that saved receipt with AI.
 
@@ -26,9 +26,11 @@ When you choose an AI scan, the Android app sends this data to the backend URL c
 
 The included backend forwards the receipt image and category context to OpenAI to extract structured receipt data. The backend returns merchant, date, total, item rows, raw extracted text, and a category decision to the app.
 
+If you enable own OpenAI key mode in Settings, the app sends receipt images and category context directly from the device to OpenAI using the API key and model you provide. In that mode, backend AI scan credits are not used for extraction.
+
 ## Purchases and scan credits
 
-Receiptory uses Google Play Billing for AI scan packs. When verifying a scan pack purchase, the app sends the product ID, Google Play purchase token, and generated installation ID to the configured backend. The included backend validates the purchase with the Google Android Publisher API and stores scan credit counters by installation ID in its local `entitlements.json` file.
+Receiptory uses Google Play Billing for AI scan packs. When verifying a scan pack purchase, the app sends the product ID, Google Play purchase token, and generated installation ID to the configured backend. The included backend validates the purchase with the Google Android Publisher API and stores scan credit counters by installation ID in its local `entitlements.json` file. Own OpenAI key mode bypasses scan credit use for AI extraction, but purchase verification still uses the backend if you buy scan packs.
 
 ## Export, restore, and deletion
 
@@ -41,7 +43,7 @@ Deleting a receipt in the app removes the local receipt record and stored photo.
 Receiptory requests:
 
 - Camera: to photograph receipts
-- Internet: to reach the configured backend, verify scan credits, verify purchases, and open policy links
+- Internet: to reach the configured backend, optionally reach OpenAI directly when own-key mode is enabled, verify scan credits, verify purchases, and open policy links
 - Google Play Billing: to sell AI scan packs through Google Play
 
 ## Backend configuration

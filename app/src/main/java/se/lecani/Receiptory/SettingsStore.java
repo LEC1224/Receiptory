@@ -9,6 +9,7 @@ import java.util.UUID;
 
 public class SettingsStore {
     public static final String DEFAULT_BACKEND_URL = "http://10.0.2.2:8787";
+    public static final String DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_LIGHT = "light";
     public static final String THEME_DARK = "dark";
@@ -18,7 +19,10 @@ public class SettingsStore {
     private static final String KEY_BACKEND_URL = "backend_url";
     private static final String KEY_CURRENCY = "currency";
     private static final String KEY_INSTALLATION_ID = "installation_id";
+    private static final String KEY_OPENAI_API_KEY = "openai_api_key";
+    private static final String KEY_OPENAI_MODEL = "openai_model";
     private static final String KEY_THEME = "theme";
+    private static final String KEY_USE_OWN_OPENAI_KEY = "use_own_openai_key";
 
     private final SharedPreferences preferences;
 
@@ -37,6 +41,35 @@ public class SettingsStore {
     public void setBackendUrl(String backendUrl) {
         String cleanUrl = backendUrl == null ? "" : backendUrl.trim();
         preferences.edit().putString(KEY_BACKEND_URL, cleanUrl.isEmpty() ? DEFAULT_BACKEND_URL : cleanUrl).apply();
+    }
+
+    public boolean useOwnOpenAiKey() {
+        return preferences.getBoolean(KEY_USE_OWN_OPENAI_KEY, false);
+    }
+
+    public void setUseOwnOpenAiKey(boolean useOwnOpenAiKey) {
+        preferences.edit().putBoolean(KEY_USE_OWN_OPENAI_KEY, useOwnOpenAiKey).apply();
+    }
+
+    public String getOpenAiApiKey() {
+        return preferences.getString(KEY_OPENAI_API_KEY, "");
+    }
+
+    public void setOpenAiApiKey(String apiKey) {
+        preferences.edit().putString(KEY_OPENAI_API_KEY, apiKey == null ? "" : apiKey.trim()).apply();
+    }
+
+    public String getOpenAiModel() {
+        String model = preferences.getString(KEY_OPENAI_MODEL, DEFAULT_OPENAI_MODEL);
+        if (model == null || model.trim().isEmpty()) {
+            return DEFAULT_OPENAI_MODEL;
+        }
+        return model.trim();
+    }
+
+    public void setOpenAiModel(String model) {
+        String cleanModel = model == null ? "" : model.trim();
+        preferences.edit().putString(KEY_OPENAI_MODEL, cleanModel.isEmpty() ? DEFAULT_OPENAI_MODEL : cleanModel).apply();
     }
 
     public boolean allowAiNewCategories() {

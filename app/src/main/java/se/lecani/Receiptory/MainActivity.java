@@ -107,6 +107,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private ReceiptStore receiptStore;
     private SettingsStore settingsStore;
     private ReceiptBackendClient receiptExtractor;
+    private OpenAiReceiptExtractor openAiReceiptExtractor;
     private BillingManager billingManager;
     private EntitlementState entitlementState = EntitlementState.empty();
     private final Set<String> verifyingPurchaseTokens = new HashSet<>();
@@ -133,6 +134,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         receiptStore.ensureDefaultCategories();
         settingsStore = new SettingsStore(this);
         receiptExtractor = new ReceiptBackendClient();
+        openAiReceiptExtractor = new OpenAiReceiptExtractor();
         billingManager = new BillingManager(this, this);
         palette = Palette.from(this, settingsStore.getTheme());
         registerBackupRestoreLaunchers();
@@ -356,9 +358,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     }
 
     private void submitReceipt(File photoFile) {
-        String backendUrl = settingsStore.getBackendUrl();
-        if (backendUrl.isEmpty()) {
-            toast("Add your AI backend URL in settings first.");
+        if (!ensureAiProviderConfigured()) {
             showSettings();
             return;
         }
@@ -366,17 +366,13 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             return;
         }
 
-        showLoading("Uploading receipt photo to AI backend...");
+        showLoading(settingsStore.useOwnOpenAiKey()
+                ? "Uploading receipt photo to OpenAI..."
+                : "Uploading receipt photo to AI backend...");
         apiExecutor.execute(() -> {
             try {
                 File storedPhoto = receiptStore.savePhoto(Uri.fromFile(photoFile));
-                ReceiptExtraction extraction = receiptExtractor.extract(
-                        storedPhoto,
-                        receiptStore.getCategories(),
-                        backendUrl,
-                        settingsStore.allowAiNewCategories(),
-                        settingsStore.getInstallationId()
-                );
+                ReceiptExtraction extraction = extractReceiptWithConfiguredAi(storedPhoto);
                 String categoryId = resolveCategoryId(extraction);
                 String receiptDate = extraction.date == null || extraction.date.isEmpty()
                         ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date())
@@ -398,7 +394,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                 );
                 receiptStore.addReceipt(receipt);
                 runOnUiThread(() -> {
-                    refreshEntitlements(false);
+                    if (!settingsStore.useOwnOpenAiKey()) {
+                        refreshEntitlements(false);
+                    }
                     showReceiptDetail(receipt.id);
                 });
             } catch (Exception exception) {
@@ -483,12 +481,29 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout aiCard = card();
         aiCard.addView(label("AI backend"));
-        aiCard.addView(subtitle("AI scans upload the receipt photo, category names, and your installation ID to this backend. The backend forwards the photo and category context to OpenAI for extraction."));
+        aiCard.addView(subtitle("Default AI scans upload the receipt photo, category names, and your installation ID to this backend. The backend forwards the photo and category context to OpenAI for extraction and uses scan credits."));
 
         EditText backendUrl = input("Backend URL");
         backendUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         backendUrl.setText(settingsStore.getBackendUrl());
         aiCard.addView(backendUrl, matchWrap());
+
+        CheckBox useOwnOpenAiKey = new CheckBox(this);
+        useOwnOpenAiKey.setText("Use my own OpenAI key instead of scan credits");
+        useOwnOpenAiKey.setTextColor(palette.text);
+        useOwnOpenAiKey.setTextSize(15);
+        useOwnOpenAiKey.setChecked(settingsStore.useOwnOpenAiKey());
+        useOwnOpenAiKey.setPadding(dp(6), dp(8), dp(6), dp(8));
+        aiCard.addView(useOwnOpenAiKey, matchWrap());
+
+        EditText openAiApiKey = input("OpenAI API key");
+        openAiApiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        openAiApiKey.setText(settingsStore.getOpenAiApiKey());
+        aiCard.addView(openAiApiKey, matchWrap());
+
+        EditText openAiModel = input("OpenAI model");
+        openAiModel.setText(settingsStore.getOpenAiModel());
+        aiCard.addView(openAiModel, matchWrap());
 
         CheckBox allowAiNewCategories = new CheckBox(this);
         allowAiNewCategories.setText("Allow AI to suggest new category");
@@ -532,6 +547,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         content.addView(save, matchWrap());
         save.setOnClickListener(view -> {
             settingsStore.setBackendUrl(backendUrl.getText().toString());
+            settingsStore.setUseOwnOpenAiKey(useOwnOpenAiKey.isChecked());
+            settingsStore.setOpenAiApiKey(openAiApiKey.getText().toString());
+            settingsStore.setOpenAiModel(openAiModel.getText().toString());
             settingsStore.setAllowAiNewCategories(allowAiNewCategories.isChecked());
             settingsStore.setCurrencyCode(currency.getText().toString());
             int checkedId = themeGroup.getCheckedRadioButtonId();
@@ -615,14 +633,15 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout localCard = card();
         localCard.addView(label("Stored on this device"));
-        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, backend URL, and this app installation ID are stored in the app's local storage."));
+        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, backend URL, optional OpenAI key/model, and this app installation ID are stored in the app's local storage."));
         localCard.addView(subtitle("Manual receipt entry stays local unless you later choose to scan that saved receipt with AI."));
         content.addView(localCard, matchWrap());
 
         LinearLayout uploadCard = card();
         uploadCard.addView(label("Uploaded for AI scanning"));
-        uploadCard.addView(subtitle("When you choose an AI scan, the app uploads the receipt photo, category names, the allow-new-categories setting, and the installation ID to the configured backend URL."));
+        uploadCard.addView(subtitle("By default, AI scans upload the receipt photo, category names, the allow-new-categories setting, and the installation ID to the configured backend URL."));
         uploadCard.addView(subtitle("The backend sends the receipt image and category context to OpenAI, then returns merchant, date, total, item rows, raw extracted text, and a category decision."));
+        uploadCard.addView(subtitle("If you turn on own OpenAI key mode, AI scans use your key and send receipt photos and category context directly from this device to OpenAI instead of using backend scan credits."));
         uploadCard.addView(subtitle("The backend also receives the installation ID for scan credit checks and purchase verification. Google Play purchase tokens are sent to the backend only when verifying scan pack purchases."));
         content.addView(uploadCard, matchWrap());
 
@@ -911,7 +930,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private void addStoreCard(LinearLayout content) {
         LinearLayout storeCard = card();
         storeCard.addView(label("AI scan credits"));
-        storeCard.addView(subtitle(entitlementState.remainingScans + " AI scans remaining. Manual receipt entry is free."));
+        storeCard.addView(subtitle(settingsStore.useOwnOpenAiKey()
+                ? "Own OpenAI key mode is on. AI scans use your OpenAI account instead of scan credits."
+                : entitlementState.remainingScans + " AI scans remaining. Manual receipt entry is free."));
         Button refresh = iconButtonText(R.drawable.ic_spark, "Refresh credits");
         storeCard.addView(refresh, compactButtonParams());
         refresh.setOnClickListener(view -> refreshEntitlements(true));
@@ -1120,16 +1141,16 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         }
         new AlertDialog.Builder(this)
                 .setTitle("Scan all unscanned receipts?")
-                .setMessage("This uploads " + unscannedReceipts.size() + " stored receipt photos to the configured AI backend and fills missing details without overwriting existing manual fields.")
+                .setMessage("This uploads " + unscannedReceipts.size() + " stored receipt photos to "
+                        + (settingsStore.useOwnOpenAiKey() ? "OpenAI using your own key" : "the configured AI backend")
+                        + " and fills missing details without overwriting existing manual fields.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Scan", (dialog, which) -> scanAllUnscanned())
                 .show();
     }
 
     private void scanAllUnscanned() {
-        String backendUrl = settingsStore.getBackendUrl();
-        if (backendUrl.isEmpty()) {
-            toast("Add your AI backend URL in settings first.");
+        if (!ensureAiProviderConfigured()) {
             showSettings();
             return;
         }
@@ -1138,19 +1159,15 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         if (!ensureAiCreditsOrOpenStore(unscannedReceipts.size())) {
             return;
         }
-        showLoading("Uploading " + unscannedReceipts.size() + " receipts to AI backend...");
+        showLoading("Uploading " + unscannedReceipts.size() + (settingsStore.useOwnOpenAiKey()
+                ? " receipts to OpenAI..."
+                : " receipts to AI backend..."));
         apiExecutor.execute(() -> {
             int scanned = 0;
             int failed = 0;
             for (Receipt receipt : unscannedReceipts) {
                 try {
-                    ReceiptExtraction extraction = receiptExtractor.extract(
-                            new File(receipt.photoPath),
-                            receiptStore.getCategories(),
-                            backendUrl,
-                            settingsStore.allowAiNewCategories(),
-                            settingsStore.getInstallationId()
-                    );
+                    ReceiptExtraction extraction = extractReceiptWithConfiguredAi(new File(receipt.photoPath));
                     receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
                     scanned++;
                 } catch (Exception exception) {
@@ -1161,7 +1178,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             int scannedCount = scanned;
             int failedCount = failed;
             runOnUiThread(() -> {
-                refreshEntitlements(false);
+                if (!settingsStore.useOwnOpenAiKey()) {
+                    refreshEntitlements(false);
+                }
                 toast("AI scan complete: " + scannedCount + " updated"
                         + (failedCount > 0 ? ", " + failedCount + " failed" : "") + ".");
                 showCategories();
@@ -1170,9 +1189,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     }
 
     private void scanReceipt(String receiptId, boolean fromArchiveView) {
-        String backendUrl = settingsStore.getBackendUrl();
-        if (backendUrl.isEmpty()) {
-            toast("Add your AI backend URL in settings first.");
+        if (!ensureAiProviderConfigured()) {
             showSettings();
             return;
         }
@@ -1186,19 +1203,17 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             return;
         }
 
-        showLoading("Uploading receipt photo to AI backend...");
+        showLoading(settingsStore.useOwnOpenAiKey()
+                ? "Uploading receipt photo to OpenAI..."
+                : "Uploading receipt photo to AI backend...");
         apiExecutor.execute(() -> {
             try {
-                ReceiptExtraction extraction = receiptExtractor.extract(
-                        new File(receipt.photoPath),
-                        receiptStore.getCategories(),
-                        backendUrl,
-                        settingsStore.allowAiNewCategories(),
-                        settingsStore.getInstallationId()
-                );
+                ReceiptExtraction extraction = extractReceiptWithConfiguredAi(new File(receipt.photoPath));
                 receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
                 runOnUiThread(() -> {
-                    refreshEntitlements(false);
+                    if (!settingsStore.useOwnOpenAiKey()) {
+                        refreshEntitlements(false);
+                    }
                     toast("Receipt scanned.");
                     showReceiptDetail(receiptId, fromArchiveView);
                 });
@@ -2207,7 +2222,44 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         transitionRootView(loading, palette.surface);
     }
 
+    private boolean ensureAiProviderConfigured() {
+        if (settingsStore.useOwnOpenAiKey()) {
+            if (settingsStore.getOpenAiApiKey().trim().isEmpty()) {
+                toast("Add your OpenAI API key in settings first, or turn off own-key mode.");
+                return false;
+            }
+            return true;
+        }
+        if (settingsStore.getBackendUrl().trim().isEmpty()) {
+            toast("Add your AI backend URL in settings first.");
+            return false;
+        }
+        return true;
+    }
+
+    private ReceiptExtraction extractReceiptWithConfiguredAi(File imageFile) throws Exception {
+        if (settingsStore.useOwnOpenAiKey()) {
+            return openAiReceiptExtractor.extract(
+                    imageFile,
+                    receiptStore.getCategories(),
+                    settingsStore.getOpenAiApiKey(),
+                    settingsStore.getOpenAiModel(),
+                    settingsStore.allowAiNewCategories()
+            );
+        }
+        return receiptExtractor.extract(
+                imageFile,
+                receiptStore.getCategories(),
+                settingsStore.getBackendUrl(),
+                settingsStore.allowAiNewCategories(),
+                settingsStore.getInstallationId()
+        );
+    }
+
     private boolean ensureAiCreditsOrOpenStore(int scansNeeded) {
+        if (settingsStore.useOwnOpenAiKey()) {
+            return true;
+        }
         if (entitlementState.remainingScans >= scansNeeded) {
             return true;
         }
