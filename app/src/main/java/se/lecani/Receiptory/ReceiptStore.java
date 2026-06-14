@@ -1,4 +1,4 @@
-package se.kvittordning.app;
+package se.lecani.Receiptory;
 
 import android.content.Context;
 import android.net.Uri;

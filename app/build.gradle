@@ -3,11 +3,11 @@ plugins {
 }
 
 android {
-    namespace "se.kvittordning.app"
+    namespace "se.lecani.Receiptory"
     compileSdk 35
 
     defaultConfig {
-        applicationId "se.kvittordning.app"
+        applicationId "se.lecani.Receiptory"
         minSdk 23
         targetSdk 35
         versionCode 1

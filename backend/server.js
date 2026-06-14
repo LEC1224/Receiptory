@@ -8,7 +8,7 @@ const HOST = process.env.HOST || "0.0.0.0";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4.1-mini";
 const OPENAI_URL = "https://api.openai.com/v1/responses";
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 25 * 1024 * 1024);
-const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || "se.kvittordning.app";
+const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || "se.lecani.Receiptory";
 const ENTITLEMENTS_FILE = process.env.ENTITLEMENTS_FILE || path.join(__dirname, "entitlements.json");
 const SCAN_PACKS = {
   ai_scans_100: { scans: 100, price: "$2" },

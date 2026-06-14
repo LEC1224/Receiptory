@@ -16,7 +16,7 @@ This backend runs on your Windows PC and keeps the OpenAI API key off the Androi
 3. Set Google Play purchase verification:
 
 ```text
-GOOGLE_PLAY_PACKAGE_NAME=se.kvittordning.app
+GOOGLE_PLAY_PACKAGE_NAME=se.lecani.Receiptory
 GOOGLE_PLAY_SERVICE_ACCOUNT_FILE=C:\secure\play-service-account.json
 ```
 

@@ -1,4 +1,4 @@
-package se.kvittordning.app;
+package se.lecani.Receiptory;
 
 public class AiScanPack {
     public static final AiScanPack[] PACKS = {

@@ -1,4 +1,4 @@
-package se.kvittordning.app;
+package se.lecani.Receiptory;
 
 import android.app.Activity;
 
