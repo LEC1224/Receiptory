@@ -8,7 +8,7 @@ import java.util.Locale;
 import java.util.UUID;
 
 public class SettingsStore {
-    public static final String DEFAULT_BACKEND_URL = "http://10.0.2.2:8787";
+    public static final String DEFAULT_BACKEND_URL = "http://lecani.se:8787";
     public static final String DEFAULT_OPENAI_MODEL = "gpt-4.1-mini";
     public static final String THEME_SYSTEM = "system";
     public static final String THEME_LIGHT = "light";
@@ -16,7 +16,6 @@ public class SettingsStore {
 
     private static final String PREFS = "kvittordning_settings";
     private static final String KEY_ALLOW_AI_NEW_CATEGORIES = "allow_ai_new_categories";
-    private static final String KEY_BACKEND_URL = "backend_url";
     private static final String KEY_CURRENCY = "currency";
     private static final String KEY_INSTALLATION_ID = "installation_id";
     private static final String KEY_OPENAI_API_KEY = "openai_api_key";
@@ -31,16 +30,11 @@ public class SettingsStore {
     }
 
     public String getBackendUrl() {
-        String backendUrl = preferences.getString(KEY_BACKEND_URL, DEFAULT_BACKEND_URL);
-        if (backendUrl == null || backendUrl.trim().isEmpty()) {
-            return DEFAULT_BACKEND_URL;
-        }
-        return backendUrl.trim();
+        return DEFAULT_BACKEND_URL;
     }
 
     public void setBackendUrl(String backendUrl) {
-        String cleanUrl = backendUrl == null ? "" : backendUrl.trim();
-        preferences.edit().putString(KEY_BACKEND_URL, cleanUrl.isEmpty() ? DEFAULT_BACKEND_URL : cleanUrl).apply();
+        // Backend URL is fixed for regular app builds.
     }
 
     public boolean useOwnOpenAiKey() {

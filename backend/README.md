@@ -22,6 +22,8 @@ GOOGLE_PLAY_SERVICE_ACCOUNT_FILE=C:\secure\play-service-account.json
 
 The service account must have Android Publisher access to the app in Play Console. The backend validates the Play purchase token, grants credits once per token in `entitlements.json`, then consumes the product so scan packs can be bought again.
 
+New installation IDs receive 20 included AI scans by default. Change `FREE_SCANS` in `.env` if you want another launch allowance.
+
 Create these one-time in-app products in Play Console:
 
 | Product ID | Title | Reward | Price |

@@ -11,13 +11,13 @@ Receiptory stores the following in the app's local storage:
 - Receipt photos you save
 - Receipt records, including merchant, date, total, category, item rows, and extracted text
 - Categories and AI-suggested category names
-- App settings, including theme, currency, backend URL, optional OpenAI key/model, AI category setting, and a generated installation ID
+- App settings, including theme, currency, optional OpenAI key/model, AI category setting, and a generated installation ID
 
 Manual receipt entry stays on your device unless you later choose to scan that saved receipt with AI.
 
 ## Data uploaded for AI scanning
 
-When you choose an AI scan, the Android app sends this data to the backend URL configured in Settings:
+When you choose a default AI scan, the Android app sends this data to Receiptory's AI backend:
 
 - The receipt photo
 - Current category IDs and names
@@ -30,7 +30,7 @@ If you enable own OpenAI key mode in Settings, the app sends receipt images and 
 
 ## Purchases and scan credits
 
-Receiptory uses Google Play Billing for AI scan packs. When verifying a scan pack purchase, the app sends the product ID, Google Play purchase token, and generated installation ID to the configured backend. The included backend validates the purchase with the Google Android Publisher API and stores scan credit counters by installation ID in its local `entitlements.json` file. Own OpenAI key mode bypasses scan credit use for AI extraction, but purchase verification still uses the backend if you buy scan packs.
+Receiptory uses Google Play Billing for AI scan packs. The included backend grants a small free AI scan allowance to new installation IDs, then tracks purchased and used scan credits. When verifying a scan pack purchase, the app sends the product ID, Google Play purchase token, and generated installation ID to the configured backend. The included backend validates the purchase with the Google Android Publisher API and stores scan credit counters by installation ID in its local `entitlements.json` file. Own OpenAI key mode bypasses scan credit use for AI extraction, but purchase verification still uses the backend if you buy scan packs.
 
 ## Export, restore, and deletion
 

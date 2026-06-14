@@ -10,6 +10,7 @@ const OPENAI_URL = "https://api.openai.com/v1/responses";
 const MAX_BODY_BYTES = Number(process.env.MAX_BODY_BYTES || 25 * 1024 * 1024);
 const PACKAGE_NAME = process.env.GOOGLE_PLAY_PACKAGE_NAME || "se.lecani.Receiptory";
 const ENTITLEMENTS_FILE = process.env.ENTITLEMENTS_FILE || path.join(__dirname, "entitlements.json");
+const FREE_SCANS = Number(process.env.FREE_SCANS || 20);
 const SCAN_PACKS = {
   ai_scans_100: { scans: 100, price: "$2" },
   ai_scans_500: { scans: 500, price: "$5" },
@@ -66,16 +67,24 @@ function writeEntitlementDatabase(database) {
 function entitlementFor(database, userId) {
   if (!database.users[userId]) {
     database.users[userId] = {
+      free_scans: FREE_SCANS,
       purchased_scans: 0,
       used_scans: 0,
       updated_at: new Date().toISOString(),
     };
   }
   const user = database.users[userId];
+  if (user.free_scans === undefined || user.free_scans === null) {
+    user.free_scans = FREE_SCANS;
+  }
+  const freeScans = Number(user.free_scans || 0);
+  const purchasedScans = Number(user.purchased_scans || 0);
+  const usedScans = Number(user.used_scans || 0);
   return {
-    remaining_scans: Math.max(0, Number(user.purchased_scans || 0) - Number(user.used_scans || 0)),
-    purchased_scans: Number(user.purchased_scans || 0),
-    used_scans: Number(user.used_scans || 0),
+    remaining_scans: Math.max(0, freeScans + purchasedScans - usedScans),
+    free_scans: freeScans,
+    purchased_scans: purchasedScans,
+    used_scans: usedScans,
   };
 }
 

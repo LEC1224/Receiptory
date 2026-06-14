@@ -5,10 +5,11 @@ En native Android-app for att fotografera kvitton, extrahera inkopsdata via en l
 ## Funktioner
 
 - Kamera som startvy med slutarknapp, retake och submit.
-- Settings-vy med ljust, morkt eller systemstyrt lage, URL till AI-backend och valfri egen OpenAI-nyckel for power users.
+- Settings-vy med ljust, morkt eller systemstyrt lage och valfri egen OpenAI-nyckel for power users.
 - Lokal lagring av originalbild, extraherad text, varurader och totalsumma.
 - Kvitton kan sparas manuellt for att AI-skannas senare.
 - AI-skanning anvander kopta Google Play scan credits som standard. Power users kan valfritt aktivera egen OpenAI-nyckel for att skanna utan att forbruka credits.
+- Nya installationer far 20 inkluderade backend AI-scans innan kopta scan packs behovs.
 - Kategorivy med total spendering per kategori och filter for manad, ar eller eget datumspann.
 - Kvitton visas kronologiskt med thumbnail, datum och total.
 - Kvitton kan flyttas mellan kategorier och anvandaren kan skapa egna kategorier.
@@ -71,7 +72,7 @@ cd backend
 Start-ScheduledTask -TaskName "Receiptory AI Backend"
 ```
 
-Pa emulator ar standard-URL `http://10.0.2.2:8787`. Pa fysisk telefon, satt Backend URL till datorns LAN-IP, till exempel `http://192.168.1.50:8787`.
+Appens standardbackend ar hardkodad till `http://lecani.se:8787` och visas inte i settings.
 
 ## Kom igang
 

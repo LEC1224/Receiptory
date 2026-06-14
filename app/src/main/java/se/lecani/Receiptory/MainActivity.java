@@ -483,11 +483,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         aiCard.addView(label("AI backend"));
         aiCard.addView(subtitle("Default AI scans upload the receipt photo, category names, and your installation ID to this backend. The backend forwards the photo and category context to OpenAI for extraction and uses scan credits."));
 
-        EditText backendUrl = input("Backend URL");
-        backendUrl.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        backendUrl.setText(settingsStore.getBackendUrl());
-        aiCard.addView(backendUrl, matchWrap());
-
         CheckBox useOwnOpenAiKey = new CheckBox(this);
         useOwnOpenAiKey.setText("Use my own OpenAI key instead of scan credits");
         useOwnOpenAiKey.setTextColor(palette.text);
@@ -546,7 +541,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         Button save = primaryButton("Save settings");
         content.addView(save, matchWrap());
         save.setOnClickListener(view -> {
-            settingsStore.setBackendUrl(backendUrl.getText().toString());
             settingsStore.setUseOwnOpenAiKey(useOwnOpenAiKey.isChecked());
             settingsStore.setOpenAiApiKey(openAiApiKey.getText().toString());
             settingsStore.setOpenAiModel(openAiModel.getText().toString());
@@ -633,13 +627,13 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout localCard = card();
         localCard.addView(label("Stored on this device"));
-        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, backend URL, optional OpenAI key/model, and this app installation ID are stored in the app's local storage."));
+        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, optional OpenAI key/model, and this app installation ID are stored in the app's local storage."));
         localCard.addView(subtitle("Manual receipt entry stays local unless you later choose to scan that saved receipt with AI."));
         content.addView(localCard, matchWrap());
 
         LinearLayout uploadCard = card();
         uploadCard.addView(label("Uploaded for AI scanning"));
-        uploadCard.addView(subtitle("By default, AI scans upload the receipt photo, category names, the allow-new-categories setting, and the installation ID to the configured backend URL."));
+        uploadCard.addView(subtitle("By default, AI scans upload the receipt photo, category names, the allow-new-categories setting, and the installation ID to Receiptory's AI backend."));
         uploadCard.addView(subtitle("The backend sends the receipt image and category context to OpenAI, then returns merchant, date, total, item rows, raw extracted text, and a category decision."));
         uploadCard.addView(subtitle("If you turn on own OpenAI key mode, AI scans use your key and send receipt photos and category context directly from this device to OpenAI instead of using backend scan credits."));
         uploadCard.addView(subtitle("The backend also receives the installation ID for scan credit checks and purchase verification. Google Play purchase tokens are sent to the backend only when verifying scan pack purchases."));
