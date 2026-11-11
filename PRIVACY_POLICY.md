@@ -1,57 +1,27 @@
 # Privacy Policy
 
-Last updated: 2026-06-14
+Last updated: 2026-11-11
 
-Receiptory is a receipt storage and AI extraction app. This policy describes how the current app and included backend handle data.
+This policy applies to Receiptory 0.2.0 and later. [Earlier versions](https://github.com/LEC1224/Receiptory/blob/30d7a21112273813e194dd89858513c0793fdba0/PRIVACY_POLICY.md) used a different scanning and purchase system.
 
-## Data stored on your device
+## On-device scanning and storage
 
-Receiptory stores the following in the app's local storage:
+Receiptory uses a bundled Google ML Kit text recognition model to read photos on the device. The app then extracts receipt details and suggests categories locally. Receipt photos, OCR text, and scan results are not sent to a server for scanning. The app does not request Android's Internet permission and scanning works without a connection.
 
-- Receipt photos you save
-- Receipt records, including merchant, date, total, category, item rows, and extracted text
-- Categories and AI-suggested category names
-- App settings, including theme, currency, optional OpenAI key/model, AI category setting, and a generated installation ID
+Receiptory stores saved photos, merchant names, dates, totals, item lists, extracted text, categories, and app preferences in private app storage. When you change a receipt's category, the app can remember that category for the same merchant on this device.
 
-Manual receipt entry stays on your device unless you later choose to scan that saved receipt with AI.
-
-## Data uploaded for AI scanning
-
-When you choose a default AI scan, the Android app sends this data to Receiptory's AI backend:
-
-- The receipt photo
-- Current category IDs and names
-- Whether AI may suggest new categories
-- The generated installation ID
-
-The included backend forwards the receipt image and category context to OpenAI to extract structured receipt data. The backend returns merchant, date, total, item rows, raw extracted text, and a category decision to the app.
-
-If you enable own OpenAI key mode in Settings, the app sends receipt images and category context directly from the device to OpenAI using the API key and model you provide. In that mode, backend AI scan credits are not used for extraction.
-
-## Purchases and scan credits
-
-Receiptory uses Google Play Billing for AI scan packs. The included backend grants a small free AI scan allowance to new installation IDs, then tracks purchased and used scan credits. When verifying a scan pack purchase, the app sends the product ID, Google Play purchase token, and generated installation ID to the configured backend. The included backend validates the purchase with the Google Android Publisher API and stores scan credit counters by installation ID in its local `entitlements.json` file. Own OpenAI key mode bypasses scan credit use for AI extraction, but purchase verification still uses the backend if you buy scan packs.
+Google describes the SDK's technical diagnostic events in its [ML Kit Android data disclosure](https://developers.google.com/ml-kit/android-data-disclosure). See [ML Kit Terms & Privacy](https://developers.google.com/ml-kit/terms) for how the SDK handles recognition input and output.
 
 ## Export, restore, and deletion
 
-The app can export a zip backup containing local receipt data and stored photos. Restore imports a selected backup file onto the device.
+Use **Local backup** in Settings to export or restore a ZIP file with receipt data and photos. You choose where to save the file. If you choose a cloud storage provider, that provider handles the file according to its own policies. Receiptory disables automatic app backup. Export a backup before uninstalling or moving to another phone.
 
-Deleting a receipt in the app removes the local receipt record and stored photo. Deleting a category removes the local category and receipts/photos in it. Receiptory does not currently include an in-app request flow to delete data that may already have been processed by the configured backend or by OpenAI.
+Deleting a receipt removes the app's local record and saved photo. Deleting a category also deletes its receipts. Deleting app data clears its local records and preferences. Exported backups must be managed separately.
 
 ## Permissions
 
-Receiptory requests:
-
-- Camera: to photograph receipts
-- Internet: to reach the configured backend, optionally reach OpenAI directly when own-key mode is enabled, verify scan credits, verify purchases, and open policy links
-- Google Play Billing: to sell AI scan packs through Google Play
-
-## Backend configuration
-
-The backend is configured by the user/operator. If you point the app to a backend that you do not control, that backend operator may process data differently from the included backend code.
+Camera access is used to photograph receipts. Policy links open in your browser.
 
 ## Contact
 
-For questions or requests, use the repository issue tracker:
-
-https://github.com/LEC1224/Receiptory/issues
+[Receiptory issue tracker](https://github.com/LEC1224/Receiptory/issues)

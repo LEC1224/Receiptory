@@ -1,46 +1,13 @@
 # Terms
 
-Last updated: 2026-06-14
+Last updated: 2026-11-11
 
-These terms apply to the current Receiptory Android app and included backend.
+These terms apply to Receiptory 0.2.0 and later.
 
-## Use of the app
+Receiptory stores receipt photos and extracts merchant names, dates, amounts, and purchased items on your device. Extraction can miss or misread information. Check the original photo and correct the saved details before using them for reimbursement, taxes, or other records.
 
-Receiptory helps store receipt photos and extract receipt details. AI extraction may be incomplete or incorrect. Review extracted merchant names, dates, totals, items, categories, and raw text before relying on them.
+Scanning does not require an account, API key, or scan credits. If an app store charges for the download, its purchase and refund terms apply.
 
-## AI scanning
+Keep any exported backups secure. Receiptory helps organize records and does not provide tax, accounting, legal, or financial advice.
 
-AI scanning uses Receiptory's AI backend and available AI scan credits by default. During a default AI scan, receipt photos and category context are uploaded to the backend and forwarded to OpenAI for extraction.
-
-You may enable own OpenAI key mode in Settings. In that mode, AI scans use the OpenAI API key and model you provide, send receipt photos and category context directly to OpenAI from your device, and do not consume backend scan credits for extraction.
-
-Manual receipt entry does not require AI scan credits.
-
-## Purchases
-
-AI scan packs are purchased through Google Play Billing. The included backend validates purchases with Google Play before adding scan credits. Scan credit availability depends on successful backend purchase verification.
-
-New installation IDs may receive a limited free AI scan allowance before paid scan packs are needed.
-
-## Your responsibility
-
-You are responsible for:
-
-- Safeguarding any OpenAI API key you enter into the app
-- Keeping exported backups secure
-- Reviewing AI-extracted data before using it for financial, tax, reimbursement, or recordkeeping decisions
-- Complying with laws and policies that apply to your use of receipt data
-
-## No professional advice
-
-Receiptory does not provide tax, accounting, legal, or financial advice.
-
-## Availability
-
-Backend availability, network access, Google Play services, and OpenAI services may affect AI scanning and purchase verification.
-
-## Contact
-
-For questions, use the repository issue tracker:
-
-https://github.com/LEC1224/Receiptory/issues
+For questions, use the [Receiptory issue tracker](https://github.com/LEC1224/Receiptory/issues).

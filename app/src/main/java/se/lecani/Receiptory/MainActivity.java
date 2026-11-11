@@ -59,7 +59,6 @@ import androidx.core.content.ContextCompat;
 import androidx.exifinterface.media.ExifInterface;
 
 import com.google.common.util.concurrent.ListenableFuture;
-import com.android.billingclient.api.Purchase;
 
 import java.io.File;
 import java.io.InputStream;
@@ -73,16 +72,14 @@ import java.util.Collections;
 import java.util.Currency;
 import java.util.Date;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends ComponentActivity implements BillingManager.Listener {
+public class MainActivity extends ComponentActivity {
     private static final int CAMERA_PERMISSION_REQUEST = 42;
     private static final String PRIVACY_POLICY_URL = "https://github.com/LEC1224/Receiptory/blob/master/PRIVACY_POLICY.md";
     private static final String TERMS_URL = "https://github.com/LEC1224/Receiptory/blob/master/TERMS.md";
@@ -92,7 +89,8 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     };
 
     private final ExecutorService cameraExecutor = Executors.newSingleThreadExecutor();
-    private final ExecutorService apiExecutor = Executors.newSingleThreadExecutor();
+    private final ExecutorService receiptExecutor = Executors.newSingleThreadExecutor();
+    private final LocalReceiptScanner receiptScanner = new LocalReceiptScanner();
     private final ExecutorService imageExecutor = Executors.newFixedThreadPool(2);
     private final LruCache<String, Bitmap> imageCache = new LruCache<String, Bitmap>(
             (int) Math.max(4 * 1024, Runtime.getRuntime().maxMemory() / 1024 / 8)
@@ -106,13 +104,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private FrameLayout root;
     private ReceiptStore receiptStore;
     private SettingsStore settingsStore;
-    private ReceiptBackendClient receiptExtractor;
-    private OpenAiReceiptExtractor openAiReceiptExtractor;
-    private BillingManager billingManager;
-    private EntitlementState entitlementState = EntitlementState.empty();
-    private final Set<String> verifyingPurchaseTokens = new HashSet<>();
     private ImageCapture imageCapture;
-    private File pendingCapture;
     private DateFilter activeFilter = DateFilter.all();
     private Palette palette;
     private int bottomInset = 0;
@@ -125,7 +117,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private ActivityResultLauncher<String> createBackupLauncher;
     private ActivityResultLauncher<String[]> restoreBackupLauncher;
     private boolean pendingRestoreReplace = false;
-    private boolean settingsVisible = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -133,9 +124,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         receiptStore = new ReceiptStore(this);
         receiptStore.ensureDefaultCategories();
         settingsStore = new SettingsStore(this);
-        receiptExtractor = new ReceiptBackendClient();
-        openAiReceiptExtractor = new OpenAiReceiptExtractor();
-        billingManager = new BillingManager(this, this);
         palette = Palette.from(this, settingsStore.getTheme());
         registerBackupRestoreLaunchers();
         applySystemBars();
@@ -147,8 +135,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             return insets;
         });
         setContentView(root);
-        billingManager.start();
-        refreshEntitlements(false);
         showCamera();
     }
 
@@ -182,9 +168,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     protected void onDestroy() {
         super.onDestroy();
         cameraExecutor.shutdown();
-        apiExecutor.shutdown();
+        receiptExecutor.execute(receiptScanner::close);
+        receiptExecutor.shutdown();
         imageExecutor.shutdown();
-        billingManager.destroy();
     }
 
     @Override
@@ -223,17 +209,20 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         cameraRoot.addView(cameraHeader, headerParams);
 
         ImageButton settingsButton = floatingIconButton(R.drawable.ic_settings);
+        settingsButton.setContentDescription("Settings");
         FrameLayout.LayoutParams settingsParams = cornerButtonParams(Gravity.TOP | Gravity.START);
         cameraRoot.addView(settingsButton, settingsParams);
         settingsButton.setOnClickListener(view -> showSettings());
 
         ImageButton storageButton = floatingIconButton(R.drawable.ic_folder);
+        storageButton.setContentDescription("Storage");
         FrameLayout.LayoutParams storageParams = cornerButtonParams(Gravity.TOP | Gravity.END);
         cameraRoot.addView(storageButton, storageParams);
         storageButton.setOnClickListener(view -> showCategories());
 
         FrameLayout shutterFrame = new FrameLayout(this);
         ImageButton shutter = new ImageButton(this);
+        shutter.setContentDescription("Take receipt photo");
         shutterButton = shutter;
         shutter.setImageResource(R.drawable.ic_camera);
         shutter.setColorFilter(palette.accent);
@@ -328,7 +317,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void showCaptureReview(File photoFile) {
         currentBackAction = this::showCamera;
-        pendingCapture = photoFile;
         FrameLayout reviewRoot = new FrameLayout(this);
         reviewRoot.setBackgroundColor(Color.BLACK);
         transitionRootView(reviewRoot, Color.BLACK);
@@ -348,7 +336,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         actions.addView(retake, weightedButton());
         retake.setOnClickListener(view -> showCamera());
 
-        Button submit = primaryButton("Scan with AI");
+        Button submit = primaryButton("Scan receipt");
         actions.addView(submit, weightedButton());
         submit.setOnClickListener(view -> submitReceipt(photoFile));
 
@@ -358,55 +346,34 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     }
 
     private void submitReceipt(File photoFile) {
-        if (!ensureAiProviderConfigured()) {
-            showSettings();
-            return;
-        }
-        if (!ensureAiCreditsOrOpenStore(1)) {
-            return;
-        }
-
-        showLoading(settingsStore.useOwnOpenAiKey()
-                ? "Uploading receipt photo to OpenAI..."
-                : "Uploading receipt photo to AI backend...");
-        apiExecutor.execute(() -> {
+        showLoading("Reading receipt on this device…");
+        receiptExecutor.execute(() -> {
             try {
+                ReceiptExtraction extraction = receiptScanner.scan(photoFile, Locale.getDefault());
                 File storedPhoto = receiptStore.savePhoto(Uri.fromFile(photoFile));
-                ReceiptExtraction extraction = extractReceiptWithConfiguredAi(storedPhoto);
-                String categoryId = resolveCategoryId(extraction);
-                String receiptDate = extraction.date == null || extraction.date.isEmpty()
-                        ? new SimpleDateFormat("yyyy-MM-dd", Locale.US).format(new Date())
-                        : extraction.date;
+                long now = System.currentTimeMillis();
                 Receipt receipt = new Receipt(
                         UUID.randomUUID().toString(),
-                        categoryId,
+                        resolveCategoryId(extraction.merchant, extraction.items),
                         extraction.merchant,
-                        receiptDate,
+                        extraction.date,
                         extraction.total,
                         storedPhoto.getAbsolutePath(),
                         extraction.items,
                         extraction.rawText,
-                        System.currentTimeMillis(),
+                        now,
                         false,
                         Receipt.AI_SCAN_EXTRACTED,
-                        System.currentTimeMillis(),
+                        now,
                         ""
                 );
+                receipt.itemsNeedReview = extraction.itemsNeedReview;
                 receiptStore.addReceipt(receipt);
-                runOnUiThread(() -> {
-                    if (!settingsStore.useOwnOpenAiKey()) {
-                        refreshEntitlements(false);
-                    }
-                    showReceiptDetail(receipt.id);
-                });
+                afterReceiptWork(() -> showReceiptDetail(receipt.id));
             } catch (Exception exception) {
-                runOnUiThread(() -> {
+                afterReceiptWork(() -> {
                     toast(exception.getMessage());
-                    if (pendingCapture != null) {
-                        showCaptureReview(pendingCapture);
-                    } else {
-                        showCamera();
-                    }
+                    showCaptureReview(photoFile);
                 });
             }
         });
@@ -414,7 +381,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void saveManualReceipt(File photoFile) {
         showLoading("Saving receipt...");
-        apiExecutor.execute(() -> {
+        receiptExecutor.execute(() -> {
             try {
                 File storedPhoto = receiptStore.savePhoto(Uri.fromFile(photoFile));
                 Receipt receipt = new Receipt(
@@ -422,7 +389,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                         defaultCategoryId(),
                         "",
                         "",
-                        0,
+                        null,
                         storedPhoto.getAbsolutePath(),
                         new ArrayList<>(),
                         "",
@@ -433,9 +400,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                         ""
                 );
                 receiptStore.addReceipt(receipt);
-                runOnUiThread(() -> showEditReceipt(receipt.id));
+                afterReceiptWork(() -> showEditReceipt(receipt.id));
             } catch (Exception exception) {
-                runOnUiThread(() -> {
+                afterReceiptWork(() -> {
                     toast(exception.getMessage());
                     showCaptureReview(photoFile);
                 });
@@ -443,15 +410,28 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         });
     }
 
-    private String resolveCategoryId(ReceiptExtraction extraction) {
-        if ("use_existing".equals(extraction.categoryAction)
-                && receiptStore.getCategory(extraction.existingCategoryId) != null) {
-            return extraction.existingCategoryId;
+    private void afterReceiptWork(Runnable action) {
+        runOnUiThread(() -> {
+            if (!isFinishing() && !isDestroyed()) {
+                action.run();
+            }
+        });
+    }
+
+    private String resolveCategoryId(String merchant, List<ReceiptItem> items) {
+        Category remembered = receiptStore.getCategory(settingsStore.categoryForMerchant(merchant));
+        if (remembered != null) {
+            return remembered.id;
         }
-        String name = extraction.newCategoryName == null || extraction.newCategoryName.isEmpty()
-                ? "Other"
-                : extraction.newCategoryName;
-        return receiptStore.addAiSuggestedCategory(name).id;
+        String name = ReceiptCategorizer.suggest(merchant, items);
+        for (Category category : receiptStore.getCategories()) {
+            if (category.name.equalsIgnoreCase(name)) {
+                return category.id;
+            }
+        }
+        return settingsStore.allowSuggestedCategories()
+                ? receiptStore.addAiSuggestedCategory(name).id
+                : defaultCategoryId();
     }
 
     private String defaultCategoryId() {
@@ -479,45 +459,25 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         appearanceCard.addView(themeGroup, matchWrap());
         content.addView(appearanceCard, matchWrap());
 
-        LinearLayout aiCard = card();
-        aiCard.addView(label("AI backend"));
-        aiCard.addView(subtitle("Default AI scans upload the receipt photo, category names, and your installation ID to this backend. The backend forwards the photo and category context to OpenAI for extraction and uses scan credits."));
-
-        CheckBox useOwnOpenAiKey = new CheckBox(this);
-        useOwnOpenAiKey.setText("Use my own OpenAI key instead of scan credits");
-        useOwnOpenAiKey.setTextColor(palette.text);
-        useOwnOpenAiKey.setTextSize(15);
-        useOwnOpenAiKey.setChecked(settingsStore.useOwnOpenAiKey());
-        useOwnOpenAiKey.setPadding(dp(6), dp(8), dp(6), dp(8));
-        aiCard.addView(useOwnOpenAiKey, matchWrap());
-
-        EditText openAiApiKey = input("OpenAI API key");
-        openAiApiKey.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        openAiApiKey.setText(settingsStore.getOpenAiApiKey());
-        aiCard.addView(openAiApiKey, matchWrap());
-
-        EditText openAiModel = input("OpenAI model");
-        openAiModel.setText(settingsStore.getOpenAiModel());
-        aiCard.addView(openAiModel, matchWrap());
-
-        CheckBox allowAiNewCategories = new CheckBox(this);
-        allowAiNewCategories.setText("Allow AI to suggest new category");
-        allowAiNewCategories.setTextColor(palette.text);
-        allowAiNewCategories.setTextSize(15);
-        allowAiNewCategories.setChecked(settingsStore.allowAiNewCategories());
-        allowAiNewCategories.setPadding(dp(6), dp(8), dp(6), dp(8));
-        aiCard.addView(allowAiNewCategories, matchWrap());
-        content.addView(aiCard, matchWrap());
+        LinearLayout scanCard = card();
+        scanCard.addView(label("Offline scanning"));
+        scanCard.addView(subtitle("Receiptory reads photos on this device and remembers your category choices for each store."));
+        CheckBox allowSuggestedCategories = new CheckBox(this);
+        allowSuggestedCategories.setText("Suggest new categories");
+        allowSuggestedCategories.setTextColor(palette.text);
+        allowSuggestedCategories.setTextSize(15);
+        allowSuggestedCategories.setChecked(settingsStore.allowSuggestedCategories());
+        allowSuggestedCategories.setPadding(dp(6), dp(8), dp(6), dp(8));
+        scanCard.addView(allowSuggestedCategories, matchWrap());
+        content.addView(scanCard, matchWrap());
 
         LinearLayout trustCard = card();
         trustCard.addView(label("Trust and privacy"));
-        trustCard.addView(subtitle("See what stays on this device, what is uploaded for AI scanning, and where to find the Privacy Policy and Terms."));
+        trustCard.addView(subtitle("See how receipt photos and data are stored and exported."));
         Button trust = iconButtonText(R.drawable.ic_receipt, "Open trust and privacy");
         trustCard.addView(trust, compactButtonParams());
         trust.setOnClickListener(view -> showTrustAndPrivacy());
         content.addView(trustCard, matchWrap());
-
-        addStoreCard(content);
 
         LinearLayout moneyCard = card();
         moneyCard.addView(label("Currency"));
@@ -541,10 +501,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         Button save = primaryButton("Save settings");
         content.addView(save, matchWrap());
         save.setOnClickListener(view -> {
-            settingsStore.setUseOwnOpenAiKey(useOwnOpenAiKey.isChecked());
-            settingsStore.setOpenAiApiKey(openAiApiKey.getText().toString());
-            settingsStore.setOpenAiModel(openAiModel.getText().toString());
-            settingsStore.setAllowAiNewCategories(allowAiNewCategories.isChecked());
+            settingsStore.setAllowSuggestedCategories(allowSuggestedCategories.isChecked());
             settingsStore.setCurrencyCode(currency.getText().toString());
             int checkedId = themeGroup.getCheckedRadioButtonId();
             View checked = themeGroup.findViewById(checkedId);
@@ -567,7 +524,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void exportBackup(Uri uri) {
         showLoading("Creating backup...");
-        apiExecutor.execute(() -> {
+        receiptExecutor.execute(() -> {
             try (OutputStream output = getContentResolver().openOutputStream(uri)) {
                 if (output == null) {
                     throw new IllegalStateException("Could not open backup destination.");
@@ -600,7 +557,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void importBackup(Uri uri, boolean replace) {
         showLoading(replace ? "Replacing from backup..." : "Merging backup...");
-        apiExecutor.execute(() -> {
+        receiptExecutor.execute(() -> {
             try (InputStream input = getContentResolver().openInputStream(uri)) {
                 if (input == null) {
                     throw new IllegalStateException("Could not open backup.");
@@ -627,33 +584,23 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout localCard = card();
         localCard.addView(label("Stored on this device"));
-        localCard.addView(subtitle("Saved receipts, receipt photos, categories, extracted text, item rows, totals, currency, theme, optional OpenAI key/model, and this app installation ID are stored in the app's local storage."));
-        localCard.addView(subtitle("Manual receipt entry stays local unless you later choose to scan that saved receipt with AI."));
+        localCard.addView(subtitle("Your receipt photos, text, items, totals, categories, and preferences are stored here. Scanning works offline and does not upload your receipts."));
         content.addView(localCard, matchWrap());
-
-        LinearLayout uploadCard = card();
-        uploadCard.addView(label("Uploaded for AI scanning"));
-        uploadCard.addView(subtitle("By default, AI scans upload the receipt photo, category names, the allow-new-categories setting, and the installation ID to Receiptory's AI backend."));
-        uploadCard.addView(subtitle("The backend sends the receipt image and category context to OpenAI, then returns merchant, date, total, item rows, raw extracted text, and a category decision."));
-        uploadCard.addView(subtitle("If you turn on own OpenAI key mode, AI scans use your key and send receipt photos and category context directly from this device to OpenAI instead of using backend scan credits."));
-        uploadCard.addView(subtitle("The backend also receives the installation ID for scan credit checks and purchase verification. Google Play purchase tokens are sent to the backend only when verifying scan pack purchases."));
-        content.addView(uploadCard, matchWrap());
 
         LinearLayout controlCard = card();
         controlCard.addView(label("Deletion and export"));
         controlCard.addView(subtitle("Deleting a receipt removes its local record and stored photo. Deleting a category removes that local category and the receipts/photos in it."));
         controlCard.addView(subtitle("Export creates a zip backup containing local receipt data and photos. Restore reads a selected backup file and imports it onto this device."));
-        controlCard.addView(subtitle("The app does not currently provide an in-app request to delete data that may have been processed by your configured backend or OpenAI."));
+        controlCard.addView(subtitle("Use a backup to keep your receipts if you change phones or reinstall."));
         content.addView(controlCard, matchWrap());
 
         LinearLayout permissionCard = card();
         permissionCard.addView(label("Permissions"));
-        permissionCard.addView(subtitle("Camera is used to photograph receipts. Internet is used for AI scanning, scan credit checks, purchase verification, and opening policy links. Billing is used for Google Play AI scan pack purchases."));
+        permissionCard.addView(subtitle("Camera access is used to photograph receipts. Policy links open in your browser."));
         content.addView(permissionCard, matchWrap());
 
         LinearLayout linksCard = card();
         linksCard.addView(label("Policies"));
-        linksCard.addView(subtitle("These documents are versioned in the GitHub repository so the Play listing can point to stable public URLs."));
         Button privacy = iconButtonText(R.drawable.ic_receipt, "Privacy Policy");
         linksCard.addView(privacy, compactButtonParams());
         privacy.setOnClickListener(view -> openExternalUrl(PRIVACY_POLICY_URL));
@@ -786,7 +733,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         double total = 0;
         for (Receipt receipt : archivedReceipts) {
             if (activeFilter.matches(receipt.date)) {
-                total += receipt.total;
+                total += receipt.totalForSummaries();
             }
         }
         content.addView(subtitle("Archived total: " + money(total)));
@@ -805,7 +752,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             }
             visibleReceipts++;
             double categoryTotal = categoryTotals.containsKey(receipt.categoryId) ? categoryTotals.get(receipt.categoryId) : 0;
-            categoryTotals.put(receipt.categoryId, categoryTotal + receipt.total);
+            categoryTotals.put(receipt.categoryId, categoryTotal + receipt.totalForSummaries());
         }
         if (visibleReceipts == 0) {
             content.addView(subtitle("No archived receipts match this filter."));
@@ -864,16 +811,21 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         installPressFeedback(photo);
 
         String status = receipt.archived ? " · Archived" : "";
-        content.addView(subtitle(receipt.date + " · " + (category == null ? "Uncategorized" : category.name) + status));
-        content.addView(chip(aiScanLabel(receipt)));
+        content.addView(subtitle((receipt.date.isEmpty() ? "Date missing" : receipt.date) + " · "
+                + (category == null ? "Uncategorized" : category.name) + status));
+        content.addView(chip(scanLabel(receipt)));
         content.addView(title(money(receipt.total)));
 
-        Button edit = iconButtonText(R.drawable.ic_edit, "Edit receipt");
+        boolean review = receipt.isAiExtracted() && needsReview(receipt);
+        if (review) {
+            content.addView(subtitle(reviewNote(receipt)));
+        }
+        Button edit = iconButtonText(R.drawable.ic_edit, review ? "Review & edit" : "Edit receipt");
         content.addView(edit, compactButtonParams());
         edit.setOnClickListener(view -> showEditReceipt(receipt.id));
 
         if (!receipt.isAiExtracted()) {
-            Button scan = iconButtonText(R.drawable.ic_spark, receipt.isAiUnscanned() ? "Scan missing details" : "Retry AI scan");
+            Button scan = iconButtonText(R.drawable.ic_spark, receipt.isAiUnscanned() ? "Scan missing details" : "Retry scan");
             content.addView(scan, compactButtonParams());
             scan.setOnClickListener(view -> scanReceipt(receipt.id, fromArchiveView || receipt.archived));
         }
@@ -917,33 +869,8 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         content.addView(label("Extracted text"));
         LinearLayout rawTextCard = card();
-        rawTextCard.addView(subtitle(receipt.rawText.isEmpty() ? "No raw text returned." : receipt.rawText));
+        rawTextCard.addView(subtitle(receipt.rawText.isEmpty() ? "No text extracted." : receipt.rawText));
         content.addView(rawTextCard, matchWrap());
-    }
-
-    private void addStoreCard(LinearLayout content) {
-        LinearLayout storeCard = card();
-        storeCard.addView(label("AI scan credits"));
-        storeCard.addView(subtitle(settingsStore.useOwnOpenAiKey()
-                ? "Own OpenAI key mode is on. AI scans use your OpenAI account instead of scan credits."
-                : entitlementState.remainingScans + " AI scans remaining. Manual receipt entry is free."));
-        Button refresh = iconButtonText(R.drawable.ic_spark, "Refresh credits");
-        storeCard.addView(refresh, compactButtonParams());
-        refresh.setOnClickListener(view -> refreshEntitlements(true));
-
-        for (AiScanPack pack : AiScanPack.PACKS) {
-            Button buy = iconButtonText(
-                    R.drawable.ic_wallet,
-                    pack.scans + " AI scans - " + billingManager.priceFor(pack)
-            );
-            buy.setEnabled(billingManager.hasProductDetails(pack));
-            if (!billingManager.hasProductDetails(pack)) {
-                buy.setAlpha(0.55f);
-            }
-            storeCard.addView(buy, compactButtonParams());
-            buy.setOnClickListener(view -> billingManager.launchPurchase(pack));
-        }
-        content.addView(storeCard, matchWrap());
     }
 
     private void confirmDeleteReceipt(String receiptId, boolean fromArchiveView) {
@@ -1006,19 +933,22 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
         LinearLayout basics = card();
         basics.addView(label("Receipt"));
+        if (receipt.isAiExtracted() && needsReview(receipt)) {
+            basics.addView(subtitle(reviewNote(receipt)));
+        }
 
         EditText merchant = input("Merchant");
         merchant.setText(receipt.merchant);
         basics.addView(merchant, matchWrap());
 
-        EditText date = input("Date");
+        EditText date = input("Date (YYYY-MM-DD)");
         date.setInputType(InputType.TYPE_CLASS_DATETIME | InputType.TYPE_DATETIME_VARIATION_DATE);
         date.setText(receipt.date);
         basics.addView(date, matchWrap());
 
         EditText total = input("Total");
         total.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL | InputType.TYPE_NUMBER_FLAG_SIGNED);
-        total.setText(formatDecimal(receipt.total));
+        total.setText(receipt.total == null ? "" : formatDecimal(receipt.total));
         basics.addView(total, matchWrap());
 
         List<Category> categories = receiptStore.getCategories();
@@ -1063,18 +993,15 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         save.setOnClickListener(view -> {
             String merchantValue = merchant.getText().toString().trim();
             String dateValue = date.getText().toString().trim();
-            if (merchantValue.isEmpty()) {
-                toast("Merchant cannot be empty.");
-                return;
-            }
-            if (dateValue.isEmpty()) {
-                toast("Date cannot be empty.");
+            if (!dateValue.isEmpty() && !dateValue.equals(receipt.date) && !ReceiptParser.isIsoDate(dateValue)) {
+                date.setError("Use a valid date in YYYY-MM-DD format.");
                 return;
             }
 
-            double totalValue;
+            Double totalValue;
             try {
-                totalValue = parseAmount(total.getText().toString());
+                String value = total.getText().toString().trim();
+                totalValue = value.isEmpty() ? null : parseAmount(value);
             } catch (NumberFormatException exception) {
                 toast("Total must be a valid number.");
                 return;
@@ -1122,6 +1049,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                     receipt.aiScanError
             );
             receiptStore.updateReceipt(updatedReceipt);
+            if (!categoryId.equals(receipt.categoryId)) {
+                settingsStore.rememberCategory(merchantValue, categoryId);
+            }
             toast("Receipt updated.");
             showReceiptDetail(receiptId);
         });
@@ -1135,35 +1065,26 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         }
         new AlertDialog.Builder(this)
                 .setTitle("Scan all unscanned receipts?")
-                .setMessage("This uploads " + unscannedReceipts.size() + " stored receipt photos to "
-                        + (settingsStore.useOwnOpenAiKey() ? "OpenAI using your own key" : "the configured AI backend")
-                        + " and fills missing details without overwriting existing manual fields.")
+                .setMessage("Read " + unscannedReceipts.size() + " stored receipt photos on this device and fill in missing details.")
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Scan", (dialog, which) -> scanAllUnscanned())
                 .show();
     }
 
     private void scanAllUnscanned() {
-        if (!ensureAiProviderConfigured()) {
-            showSettings();
-            return;
-        }
-
         List<Receipt> unscannedReceipts = receiptStore.getUnscannedReceipts();
-        if (!ensureAiCreditsOrOpenStore(unscannedReceipts.size())) {
-            return;
-        }
-        showLoading("Uploading " + unscannedReceipts.size() + (settingsStore.useOwnOpenAiKey()
-                ? " receipts to OpenAI..."
-                : " receipts to AI backend..."));
-        apiExecutor.execute(() -> {
+        showLoading("Reading " + unscannedReceipts.size() + " receipts on this device…");
+        receiptExecutor.execute(() -> {
             int scanned = 0;
             int failed = 0;
+            int review = 0;
             for (Receipt receipt : unscannedReceipts) {
                 try {
-                    ReceiptExtraction extraction = extractReceiptWithConfiguredAi(new File(receipt.photoPath));
-                    receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
+                    Receipt updated = scanSavedReceipt(receipt);
                     scanned++;
+                    if (needsReview(updated)) {
+                        review++;
+                    }
                 } catch (Exception exception) {
                     markReceiptScanFailed(receipt, exception);
                     failed++;
@@ -1171,11 +1092,10 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
             }
             int scannedCount = scanned;
             int failedCount = failed;
-            runOnUiThread(() -> {
-                if (!settingsStore.useOwnOpenAiKey()) {
-                    refreshEntitlements(false);
-                }
-                toast("AI scan complete: " + scannedCount + " updated"
+            int reviewCount = review;
+            afterReceiptWork(() -> {
+                toast("Scan complete: " + scannedCount + " updated"
+                        + (reviewCount > 0 ? ", " + reviewCount + " to review" : "")
                         + (failedCount > 0 ? ", " + failedCount + " failed" : "") + ".");
                 showCategories();
             });
@@ -1183,92 +1103,68 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     }
 
     private void scanReceipt(String receiptId, boolean fromArchiveView) {
-        if (!ensureAiProviderConfigured()) {
-            showSettings();
-            return;
-        }
-
         Receipt receipt = receiptStore.getReceipt(receiptId);
         if (receipt == null) {
             showCategories();
             return;
         }
-        if (!ensureAiCreditsOrOpenStore(1)) {
-            return;
-        }
-
-        showLoading(settingsStore.useOwnOpenAiKey()
-                ? "Uploading receipt photo to OpenAI..."
-                : "Uploading receipt photo to AI backend...");
-        apiExecutor.execute(() -> {
+        showLoading("Reading receipt on this device…");
+        receiptExecutor.execute(() -> {
             try {
-                ReceiptExtraction extraction = extractReceiptWithConfiguredAi(new File(receipt.photoPath));
-                receiptStore.updateReceipt(applyExtractionToReceipt(receipt, extraction));
-                runOnUiThread(() -> {
-                    if (!settingsStore.useOwnOpenAiKey()) {
-                        refreshEntitlements(false);
-                    }
+                scanSavedReceipt(receipt);
+                afterReceiptWork(() -> {
                     toast("Receipt scanned.");
                     showReceiptDetail(receiptId, fromArchiveView);
                 });
             } catch (Exception exception) {
                 markReceiptScanFailed(receipt, exception);
-                runOnUiThread(() -> {
-                    toast("AI scan failed: " + exception.getMessage());
+                afterReceiptWork(() -> {
+                    toast("Scan failed: " + exception.getMessage());
                     showReceiptDetail(receiptId, fromArchiveView);
                 });
             }
         });
     }
 
-    private Receipt applyExtractionToReceipt(Receipt receipt, ReceiptExtraction extraction) {
-        String categoryId = receipt.categoryId;
-        if (shouldReplaceCategory(receipt)) {
-            categoryId = resolveCategoryId(extraction);
-        }
-
+    private Receipt scanSavedReceipt(Receipt receipt) throws Exception {
+        ReceiptExtraction extraction = receiptScanner.scan(new File(receipt.photoPath), Locale.getDefault());
         String merchant = shouldReplaceText(receipt.merchant) ? extraction.merchant : receipt.merchant;
-        String date = shouldReplaceText(receipt.date) ? extraction.date : receipt.date;
-        double total = receipt.total <= 0 ? extraction.total : receipt.total;
-        List<ReceiptItem> items = receipt.items == null || receipt.items.isEmpty()
-                ? extraction.items
-                : receipt.items;
-        String rawText = shouldReplaceText(receipt.rawText) ? extraction.rawText : receipt.rawText;
+        String date = receipt.date.isEmpty() ? extraction.date : receipt.date;
+        Double total = receipt.total == null ? extraction.total : receipt.total;
+        boolean fillItems = receipt.items.isEmpty();
+        List<ReceiptItem> items = fillItems ? extraction.items : receipt.items;
+        String rawText = receipt.rawText.isEmpty() ? extraction.rawText : receipt.rawText;
+        Category category = receiptStore.getCategory(receipt.categoryId);
+        String categoryId = category == null || "Other".equalsIgnoreCase(category.name)
+                ? resolveCategoryId(merchant, items) : category.id;
 
-        return new Receipt(
+        Receipt updated = new Receipt(
                 receipt.id,
                 categoryId,
-                merchant == null ? "" : merchant,
-                date == null ? "" : date,
+                merchant,
+                date,
                 total,
                 receipt.photoPath,
-                items == null ? new ArrayList<>() : new ArrayList<>(items),
-                rawText == null ? "" : rawText,
+                new ArrayList<>(items),
+                rawText,
                 receipt.createdAt,
                 receipt.archived,
                 Receipt.AI_SCAN_EXTRACTED,
                 System.currentTimeMillis(),
                 ""
         );
+        updated.itemsNeedReview = fillItems
+                ? extraction.itemsNeedReview || (receipt.total != null && extraction.total != null
+                        && Math.abs(receipt.total - extraction.total) > 0.005)
+                : receipt.itemsNeedReview;
+        receiptStore.updateReceipt(updated);
+        return updated;
     }
 
     private void markReceiptScanFailed(Receipt receipt, Exception exception) {
-        Receipt failedReceipt = new Receipt(
-                receipt.id,
-                receipt.categoryId,
-                receipt.merchant,
-                receipt.date,
-                receipt.total,
-                receipt.photoPath,
-                receipt.items == null ? new ArrayList<>() : new ArrayList<>(receipt.items),
-                receipt.rawText,
-                receipt.createdAt,
-                receipt.archived,
-                Receipt.AI_SCAN_FAILED,
-                receipt.aiScannedAt,
-                exception.getMessage()
-        );
-        receiptStore.updateReceipt(failedReceipt);
+        receipt.aiScanStatus = Receipt.AI_SCAN_FAILED;
+        receipt.aiScanError = exception.getMessage();
+        receiptStore.updateReceipt(receipt);
     }
 
     private boolean shouldReplaceText(String value) {
@@ -1278,17 +1174,29 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                 || "Unknown merchant".equalsIgnoreCase(clean);
     }
 
-    private boolean shouldReplaceCategory(Receipt receipt) {
-        Category category = receiptStore.getCategory(receipt.categoryId);
-        return category == null || "Other".equalsIgnoreCase(category.name);
+    private boolean needsReview(Receipt receipt) {
+        return shouldReplaceText(receipt.merchant) || receipt.date.isEmpty()
+                || receipt.total == null || receipt.itemsNeedReview;
     }
 
-    private String aiScanLabel(Receipt receipt) {
+    private String reviewNote(Receipt receipt) {
+        List<String> missing = new ArrayList<>();
+        if (shouldReplaceText(receipt.merchant)) missing.add("store");
+        if (receipt.date.isEmpty()) missing.add("date");
+        if (receipt.total == null) missing.add("total");
+        String note = missing.isEmpty() ? "" : "Could not confirm: " + android.text.TextUtils.join(", ", missing) + ".";
+        if (receipt.itemsNeedReview) {
+            note += (note.isEmpty() ? "" : " ") + "Check the items and prices against the photo.";
+        }
+        return note;
+    }
+
+    private String scanLabel(Receipt receipt) {
         if (Receipt.AI_SCAN_EXTRACTED.equals(receipt.aiScanStatus)) {
-            return "AI scanned";
+            return needsReview(receipt) ? "Review scan" : "Scanned";
         }
         if (Receipt.AI_SCAN_FAILED.equals(receipt.aiScanStatus)) {
-            return "AI scan failed";
+            return "Scan failed";
         }
         return "Manual receipt";
     }
@@ -1527,7 +1435,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         Map<String, Double> totals = new HashMap<>();
         for (Receipt receipt : receipts) {
             double current = totals.containsKey(receipt.categoryId) ? totals.get(receipt.categoryId) : 0;
-            totals.put(receipt.categoryId, current + receipt.total);
+            totals.put(receipt.categoryId, current + receipt.totalForSummaries());
         }
 
         List<Map.Entry<String, Double>> ranked = new ArrayList<>(totals.entrySet());
@@ -1576,12 +1484,17 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void addBiggestPurchases(LinearLayout summary, List<Receipt> receipts, boolean usingAllTimeFallback) {
         summary.addView(label("Biggest purchases"));
-        if (receipts.isEmpty()) {
+        List<Receipt> ranked = new ArrayList<>();
+        for (Receipt receipt : receipts) {
+            if (receipt.total != null) {
+                ranked.add(receipt);
+            }
+        }
+        if (ranked.isEmpty()) {
             summary.addView(subtitle("No purchases to rank yet."));
             return;
         }
 
-        List<Receipt> ranked = new ArrayList<>(receipts);
         Collections.sort(ranked, (left, right) -> Double.compare(right.total, left.total));
         int shown = Math.min(3, ranked.size());
         for (int index = 0; index < shown; index++) {
@@ -1628,7 +1541,8 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         TextView merchant = title(receipt.merchant == null || receipt.merchant.trim().isEmpty() ? "Receipt" : receipt.merchant);
         merchant.setTextSize(17);
         Category category = receiptStore.getCategory(receipt.categoryId);
-        String detail = receipt.date + " · " + (category == null ? "Uncategorized" : category.name);
+        String detail = (receipt.date.isEmpty() ? "Date missing" : receipt.date) + " · "
+                + (category == null ? "Uncategorized" : category.name);
         TextView meta = subtitle(detail);
         meta.setTextSize(14);
         copy.addView(merchant);
@@ -1656,7 +1570,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         double total = 0;
         for (Receipt receipt : receiptStore.getReceipts()) {
             if (dateMatchesMonth(receipt.date, yyyyMm)) {
-                total += receipt.total;
+                total += receipt.totalForSummaries();
             }
         }
         return total;
@@ -1692,7 +1606,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         loadPhoto(thumb, new File(receipt.photoPath), 72, 72, ImageView.ScaleType.CENTER_CROP);
         entry.addView(thumb, new LinearLayout.LayoutParams(dp(72), dp(72)));
 
-        TextView date = title(receipt.date);
+        TextView date = title(receipt.date.isEmpty() ? "Date missing" : receipt.date);
         LinearLayout.LayoutParams dateParams = new LinearLayout.LayoutParams(0, wrap(), 1);
         dateParams.leftMargin = dp(14);
         entry.addView(date, dateParams);
@@ -1745,7 +1659,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private boolean receiptMatchesSearch(Receipt receipt, String normalizedQuery) {
         if (matchesSearch(receipt.merchant, normalizedQuery)
                 || matchesSearch(receipt.date, normalizedQuery)
-                || matchesSearch(totalSearchText(receipt.total), normalizedQuery)) {
+                || (receipt.total != null && matchesSearch(totalSearchText(receipt.total), normalizedQuery))) {
             return true;
         }
 
@@ -1894,9 +1808,10 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
                 .setItems(names, (dialog, which) -> {
                     String newCategoryId = categories.get(which).id;
                     receiptStore.moveReceipt(receiptId, newCategoryId);
+                    settingsStore.rememberCategory(receipt.merchant, newCategoryId);
                     if (!originalCategoryId.equals(newCategoryId)
                             && receiptStore.deleteEmptyAiSuggestedCategory(originalCategoryId)) {
-                        toast("Removed empty AI-suggested category.");
+                        toast("Removed empty suggested category.");
                     }
                     showReceiptDetail(receiptId);
                 })
@@ -2203,7 +2118,6 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private void showLoading(String message) {
         currentBackAction = null;
-        settingsVisible = false;
         LinearLayout loading = new LinearLayout(this);
         loading.setOrientation(LinearLayout.VERTICAL);
         loading.setGravity(Gravity.CENTER);
@@ -2216,150 +2130,9 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         transitionRootView(loading, palette.surface);
     }
 
-    private boolean ensureAiProviderConfigured() {
-        if (settingsStore.useOwnOpenAiKey()) {
-            if (settingsStore.getOpenAiApiKey().trim().isEmpty()) {
-                toast("Add your OpenAI API key in settings first, or turn off own-key mode.");
-                return false;
-            }
-            return true;
-        }
-        if (settingsStore.getBackendUrl().trim().isEmpty()) {
-            toast("Add your AI backend URL in settings first.");
-            return false;
-        }
-        return true;
-    }
-
-    private ReceiptExtraction extractReceiptWithConfiguredAi(File imageFile) throws Exception {
-        if (settingsStore.useOwnOpenAiKey()) {
-            return openAiReceiptExtractor.extract(
-                    imageFile,
-                    receiptStore.getCategories(),
-                    settingsStore.getOpenAiApiKey(),
-                    settingsStore.getOpenAiModel(),
-                    settingsStore.allowAiNewCategories()
-            );
-        }
-        return receiptExtractor.extract(
-                imageFile,
-                receiptStore.getCategories(),
-                settingsStore.getBackendUrl(),
-                settingsStore.allowAiNewCategories(),
-                settingsStore.getInstallationId()
-        );
-    }
-
-    private boolean ensureAiCreditsOrOpenStore(int scansNeeded) {
-        if (settingsStore.useOwnOpenAiKey()) {
-            return true;
-        }
-        if (entitlementState.remainingScans >= scansNeeded) {
-            return true;
-        }
-        toast(scansNeeded == 1
-                ? "Buy AI scan credits to scan this receipt. Manual entry is still free."
-                : "Buy more AI scan credits to scan these receipts. Manual entry is still free.");
-        showSettings();
-        refreshEntitlements(true);
-        return false;
-    }
-
-    private void refreshEntitlements(boolean showResult) {
-        String backendUrl = settingsStore.getBackendUrl();
-        if (backendUrl == null || backendUrl.trim().isEmpty()) {
-            return;
-        }
-        apiExecutor.execute(() -> {
-            try {
-                EntitlementState refreshed = receiptExtractor.getEntitlements(
-                        backendUrl,
-                        settingsStore.getInstallationId()
-                );
-                runOnUiThread(() -> {
-                    entitlementState = refreshed;
-                    if (showResult) {
-                        toast(refreshed.remainingScans + " AI scans remaining.");
-                        showSettings();
-                    }
-                });
-            } catch (Exception exception) {
-                if (showResult) {
-                    runOnUiThread(() -> toast("Could not refresh credits: " + exception.getMessage()));
-                }
-            }
-        });
-    }
-
-    @Override
-    public void onProductsUpdated() {
-        if (settingsVisible) {
-            runOnUiThread(this::showSettings);
-        }
-    }
-
-    @Override
-    public void onPurchaseReadyForVerification(Purchase purchase) {
-        if (purchase == null || verifyingPurchaseTokens.contains(purchase.getPurchaseToken())) {
-            return;
-        }
-        String productId = null;
-        for (String candidate : purchase.getProducts()) {
-            if (AiScanPack.find(candidate) != null) {
-                productId = candidate;
-                break;
-            }
-        }
-        if (productId == null) {
-            return;
-        }
-
-        verifyingPurchaseTokens.add(purchase.getPurchaseToken());
-        showLoading("Verifying purchase...");
-        String backendUrl = settingsStore.getBackendUrl();
-        String verifiedProductId = productId;
-        apiExecutor.execute(() -> {
-            try {
-                PurchaseVerification verification = receiptExtractor.verifyPurchase(
-                        backendUrl,
-                        settingsStore.getInstallationId(),
-                        verifiedProductId,
-                        purchase.getPurchaseToken()
-                );
-                runOnUiThread(() -> {
-                    verifyingPurchaseTokens.remove(purchase.getPurchaseToken());
-                    entitlementState = verification.entitlementState;
-                    if (verification.ok) {
-                        String message = verification.alreadyGranted
-                                ? "Purchase already added. "
-                                : "Added " + verification.grantedScans + " AI scans. ";
-                        toast(message + entitlementState.remainingScans + " remaining.");
-                    } else {
-                        toast("Purchase could not be verified.");
-                    }
-                    showSettings();
-                });
-            } catch (Exception exception) {
-                runOnUiThread(() -> {
-                    verifyingPurchaseTokens.remove(purchase.getPurchaseToken());
-                    toast("Purchase verification failed: " + exception.getMessage());
-                    showSettings();
-                });
-            }
-        });
-    }
-
-    @Override
-    public void onBillingUnavailable(String message) {
-        runOnUiThread(() -> toast(message == null || message.trim().isEmpty()
-                ? "Google Play billing is unavailable."
-                : message));
-    }
-
     private ScrollView page(String titleText, Runnable backAction) {
         currentBackAction = backAction;
         fullscreenReceiptId = null;
-        settingsVisible = "Settings".equals(titleText);
         ScrollView scrollView = new ScrollView(this);
         scrollView.setBackgroundColor(palette.surface);
         LinearLayout content = new LinearLayout(this);
@@ -2611,7 +2384,10 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
         }
     }
 
-    private String money(double amount) {
+    private String money(Double amount) {
+        if (amount == null) {
+            return "Total missing";
+        }
         NumberFormat format = NumberFormat.getCurrencyInstance(Locale.getDefault());
         try {
             format.setCurrency(Currency.getInstance(settingsStore.getCurrencyCode()));
@@ -2629,10 +2405,11 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
 
     private double parseAmount(String value) {
         String normalized = value == null ? "" : value.trim().replace(',', '.');
-        if (normalized.isEmpty()) {
-            return 0;
+        double amount = Double.parseDouble(normalized);
+        if (Double.isNaN(amount) || Double.isInfinite(amount)) {
+            throw new NumberFormatException("Amount must be finite");
         }
-        return Double.parseDouble(normalized);
+        return amount;
     }
 
     private static String normalizeSearch(String value) {
@@ -2795,7 +2572,7 @@ public class MainActivity extends ComponentActivity implements BillingManager.Li
     private void requestCameraPermissionWithContext() {
         new AlertDialog.Builder(this)
                 .setTitle("Camera access")
-                .setMessage("Receiptory uses the camera only to photograph receipts. Saved photos stay on this device unless you choose an AI scan, which uploads the receipt photo to your configured backend.")
+                .setMessage("Receiptory uses the camera to photograph receipts. Photos are scanned and stored on this device.")
                 .setNegativeButton("Not now", (dialog, which) ->
                         toast("Camera permission is needed to photograph receipts."))
                 .setPositiveButton("Continue", (dialog, which) ->

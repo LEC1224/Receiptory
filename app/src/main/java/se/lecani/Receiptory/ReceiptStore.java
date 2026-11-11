@@ -91,7 +91,7 @@ public class ReceiptStore {
     public List<Receipt> getUnscannedReceipts() {
         List<Receipt> unscanned = new ArrayList<>();
         for (Receipt receipt : receipts) {
-            if (!receipt.archived && receipt.isAiUnscanned() && hasReadablePhoto(receipt)) {
+            if (!receipt.archived && !receipt.isAiExtracted() && hasReadablePhoto(receipt)) {
                 unscanned.add(receipt);
             }
         }
@@ -259,7 +259,7 @@ public class ReceiptStore {
             if (receipt.categoryId.equals(categoryId)
                     && (includeArchived || !receipt.archived)
                     && filter.matches(receipt.date)) {
-                total += receipt.total;
+                total += receipt.totalForSummaries();
             }
         }
         return total;
@@ -506,14 +506,18 @@ public class ReceiptStore {
         Set<String> existingSignatures = new HashSet<>();
         for (Receipt receipt : receipts) {
             existingIds.add(receipt.id);
-            existingSignatures.add(receiptSignature(receipt));
+            String signature = receiptSignature(receipt);
+            if (signature != null) {
+                existingSignatures.add(signature);
+            }
         }
 
         int addedReceipts = 0;
         int skippedReceipts = 0;
         for (Receipt importedReceipt : importedReceipts) {
             String signature = receiptSignature(importedReceipt);
-            if (existingIds.contains(importedReceipt.id) || existingSignatures.contains(signature)) {
+            if (existingIds.contains(importedReceipt.id)
+                    || (signature != null && existingSignatures.contains(signature))) {
                 skippedReceipts++;
                 continue;
             }
@@ -526,7 +530,9 @@ public class ReceiptStore {
             Receipt copied = copyImportedReceipt(importedReceipt, importedPhotos, categoryId);
             receipts.add(copied);
             existingIds.add(copied.id);
-            existingSignatures.add(signature);
+            if (signature != null) {
+                existingSignatures.add(signature);
+            }
             addedReceipts++;
         }
         return new RestoreResult(addedReceipts, addedCategories, skippedReceipts);
@@ -544,7 +550,7 @@ public class ReceiptStore {
             photoPath = destination.getAbsolutePath();
         }
 
-        return new Receipt(
+        Receipt copied = new Receipt(
                 receipt.id == null || receipt.id.trim().isEmpty() ? UUID.randomUUID().toString() : receipt.id,
                 categoryId,
                 receipt.merchant,
@@ -559,6 +565,8 @@ public class ReceiptStore {
                 receipt.aiScannedAt,
                 receipt.aiScanError
         );
+        copied.itemsNeedReview = receipt.itemsNeedReview;
+        return copied;
     }
 
     private void deletePhoto(Receipt receipt) {
@@ -663,6 +671,11 @@ public class ReceiptStore {
     }
 
     private static String receiptSignature(Receipt receipt) {
+        // Different photos can have identical empty fields before scanning or review.
+        if (receipt.merchant.trim().isEmpty() || receipt.date.trim().isEmpty()
+                || receipt.total == null || receipt.rawText.trim().isEmpty()) {
+            return null;
+        }
         return normalize(receipt.merchant)
                 + "|" + normalize(receipt.date)
                 + "|" + String.format(Locale.US, "%.2f", receipt.total)

@@ -2,6 +2,8 @@ plugins {
     id "com.android.application"
 }
 
+def signingPropertiesPath = providers.gradleProperty("receiptorySigningProperties").orNull
+
 android {
     namespace "se.lecani.Receiptory"
     compileSdk 35
@@ -10,8 +12,25 @@ android {
         applicationId "se.lecani.Receiptory"
         minSdk 23
         targetSdk 35
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 2
+        versionName "0.2.0"
+        testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    if (signingPropertiesPath != null) {
+        def configFile = rootProject.file(signingPropertiesPath)
+        def keys = new Properties()
+        configFile.withInputStream { keys.load(it) }
+        def keyFile = new File(keys.getProperty("storeFile"))
+        signingConfigs {
+            release {
+                storeFile (keyFile.isAbsolute() ? keyFile : new File(configFile.parentFile, keyFile.path))
+                storePassword keys.getProperty("storePassword")
+                keyAlias keys.getProperty("keyAlias")
+                keyPassword keys.getProperty("keyPassword")
+            }
+        }
+        buildTypes.release.signingConfig = signingConfigs.release
     }
 
     compileOptions {
@@ -29,5 +48,7 @@ dependencies {
     implementation "androidx.camera:camera-lifecycle:$cameraxVersion"
     implementation "androidx.camera:camera-view:$cameraxVersion"
     implementation "androidx.exifinterface:exifinterface:1.3.7"
-    implementation "com.android.billingclient:billing:8.3.0"
+    implementation "com.google.mlkit:text-recognition:16.0.1"
+    testImplementation "junit:junit:4.13.2"
+    androidTestImplementation "androidx.test:runner:1.6.2"
 }

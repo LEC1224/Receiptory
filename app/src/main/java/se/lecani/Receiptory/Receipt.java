@@ -16,7 +16,7 @@ public class Receipt {
     public String categoryId;
     public String merchant;
     public String date;
-    public double total;
+    public Double total;
     public final String photoPath;
     public List<ReceiptItem> items;
     public String rawText;
@@ -25,13 +25,14 @@ public class Receipt {
     public String aiScanStatus;
     public long aiScannedAt;
     public String aiScanError;
+    public boolean itemsNeedReview;
 
     public Receipt(
             String id,
             String categoryId,
             String merchant,
             String date,
-            double total,
+            Double total,
             String photoPath,
             List<ReceiptItem> items,
             String rawText,
@@ -45,7 +46,7 @@ public class Receipt {
             String categoryId,
             String merchant,
             String date,
-            double total,
+            Double total,
             String photoPath,
             List<ReceiptItem> items,
             String rawText,
@@ -74,7 +75,7 @@ public class Receipt {
             String categoryId,
             String merchant,
             String date,
-            double total,
+            Double total,
             String photoPath,
             List<ReceiptItem> items,
             String rawText,
@@ -116,21 +117,31 @@ public class Receipt {
                 ? AI_SCAN_MANUAL
                 : AI_SCAN_EXTRACTED;
 
-        return new Receipt(
+        String scanStatus = json.optString("aiScanStatus", defaultScanStatus);
+        double amount = json.optDouble("total", Double.NaN);
+        Double total = Double.isNaN(amount) || Double.isInfinite(amount) ? null : amount;
+        // Before totals could be blank, untouched manual drafts used 0 as a placeholder.
+        if (json.optInt("schemaVersion", 1) < 2 && total != null && total == 0 && !AI_SCAN_EXTRACTED.equals(scanStatus)
+                && json.optString("merchant").trim().isEmpty() && json.optString("date").trim().isEmpty()) {
+            total = null;
+        }
+        Receipt receipt = new Receipt(
                 json.optString("id"),
                 json.optString("categoryId"),
                 json.optString("merchant"),
                 json.optString("date"),
-                json.optDouble("total", 0),
+                total,
                 json.optString("photoPath"),
                 items,
                 rawText,
                 json.optLong("createdAt", 0),
                 json.optBoolean("archived", false),
-                json.optString("aiScanStatus", defaultScanStatus),
+                scanStatus,
                 json.optLong("aiScannedAt", 0),
                 json.optString("aiScanError", "")
         );
+        receipt.itemsNeedReview = json.optBoolean("itemsNeedReview");
+        return receipt;
     }
 
     public JSONObject toJson() throws JSONException {
@@ -141,15 +152,19 @@ public class Receipt {
         }
 
         json.put("id", id);
+        json.put("schemaVersion", 2);
         json.put("categoryId", categoryId);
         json.put("merchant", merchant);
         json.put("date", date);
-        json.put("total", total);
+        json.put("total", total == null ? JSONObject.NULL : total);
         json.put("photoPath", photoPath);
         json.put("items", itemArray);
         json.put("rawText", rawText);
         json.put("createdAt", createdAt);
         json.put("aiScanStatus", aiScanStatus);
+        if (itemsNeedReview) {
+            json.put("itemsNeedReview", true);
+        }
         if (aiScannedAt > 0) {
             json.put("aiScannedAt", aiScannedAt);
         }
@@ -168,6 +183,10 @@ public class Receipt {
 
     public boolean isAiExtracted() {
         return AI_SCAN_EXTRACTED.equals(aiScanStatus);
+    }
+
+    public double totalForSummaries() {
+        return total == null ? 0 : total;
     }
 
     private static String cleanAiScanStatus(String status) {

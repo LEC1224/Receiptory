@@ -1,5 +1,7 @@
 # Receiptory AI backend
 
+> Legacy service for Receiptory 0.1.x. Receiptory 0.2.0 and later scan on the phone and do not use this backend.
+
 This backend runs on your Windows PC and keeps the OpenAI API key off the Android device. The Android app sends receipt photos and category names to this service, then this service calls OpenAI and returns the structured receipt JSON.
 
 ## Requirements
